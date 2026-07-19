@@ -1,0 +1,119 @@
+// Prisma schema for the multiplayer Bingo bot.
+// Run `npx prisma migrate dev` to create the tables.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum GameStatus {
+  WAITING_FOR_PLAYERS
+  CARD_GENERATED
+  COUNTDOWN
+  PLAYING
+  FINISHED
+  CANCELLED
+}
+
+model User {
+  id         String   @id @default(cuid())
+  telegramId BigInt   @unique
+  username   String?
+  firstName  String?
+  createdAt  DateTime @default(now())
+
+  players     Player[]
+  hostedGames Game[]      @relation("HostGames")
+  wins        Winner[]
+  statistics  Statistics?
+
+  @@map("users")
+}
+
+model Game {
+  id             String     @id @default(cuid())
+  chatId         BigInt // Telegram group where the game runs
+  status         GameStatus @default(WAITING_FOR_PLAYERS)
+  hostId         String
+  host           User       @relation("HostGames", fields: [hostId], references: [id])
+  intervalMs     Int        @default(10000)
+  countdownSec   Int        @default(60)
+  maxPlayers     Int        @default(20)
+  minPlayers     Int        @default(2)
+  patterns       String[] // enabled winning-pattern keys
+  currentNumber  Int?
+  winnerId       String? // scalar (not FK) so the winner-claim update stays atomic
+  lobbyMessageId Int? // group lobby message we keep editing
+  startedAt      DateTime?
+  endedAt        DateTime?
+  createdAt      DateTime   @default(now())
+
+  players       Player[]
+  calledNumbers CalledNumber[]
+  winner        Winner?
+
+  @@index([chatId, status])
+  @@map("games")
+}
+
+model Player {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id])
+  gameId        String
+  game          Game      @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  card          Json // 5x5 matrix of numbers (0 = FREE center)
+  markedNumbers Int[]     @default([]) // numbers the player has daubed
+  hasBingo      Boolean   @default(false) // server-detected valid pattern (informational)
+  cardMessageId Int? // the DM message showing their card
+  joinedAt      DateTime  @default(now())
+  leftAt        DateTime?
+
+  @@unique([userId, gameId]) // prevents duplicate joins
+  @@index([gameId])
+  @@map("players")
+}
+
+model CalledNumber {
+  id       String   @id @default(cuid())
+  gameId   String
+  game     Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  number   Int
+  order    Int // 1-based draw order
+  calledAt DateTime @default(now())
+
+  @@unique([gameId, number]) // a number is never called twice
+  @@index([gameId])
+  @@map("called_numbers")
+}
+
+model Winner {
+  id            String   @id @default(cuid())
+  gameId        String   @unique
+  game          Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  pattern       String // HORIZONTAL / VERTICAL / DIAGONAL
+  numbersCalled Int
+  durationMs    Int
+  createdAt     DateTime @default(now())
+
+  @@map("winners")
+}
+
+model Statistics {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id])
+  gamesPlayed  Int      @default(0)
+  gamesWon     Int      @default(0)
+  bingosCalled Int      @default(0)
+  falseBingos  Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  @@map("statistics")
+}
