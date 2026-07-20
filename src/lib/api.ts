@@ -37,6 +37,7 @@ async function request<T>(
 export const api = {
   state: () => request<RoomState>('/room/state'),
   select: (cardNumber: number) => request<ActionResult>('/room/select', { cardNumber }),
+  deselect: () => request<ActionResult>('/room/deselect'),
   mark: (number: number) => request<ActionResult>('/room/mark', { number }),
   bingo: () => request<ActionResult>('/room/bingo'),
 

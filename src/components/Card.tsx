@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { LETTERS } from '@/lib/bingo';
 
 interface Props {
@@ -10,7 +11,7 @@ interface Props {
 
 // The player's 5×5 card: white cells with a colored BINGO header and a gold star free
 // center. Marked numbers get a red daub; callable (called, not yet marked) cells pulse.
-export function Card({ card, marked, called, onMark, active }: Props) {
+function CardImpl({ card, marked, called, onMark, active }: Props) {
   const markedSet = new Set(marked);
   const calledSet = new Set(called);
 
@@ -61,3 +62,12 @@ export function Card({ card, marked, called, onMark, active }: Props) {
     </div>
   );
 }
+
+export const Card = memo(
+  CardImpl,
+  (a, b) =>
+    a.card === b.card &&
+    a.active === b.active &&
+    a.marked.length === b.marked.length &&
+    a.called.length === b.called.length,
+);

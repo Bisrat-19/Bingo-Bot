@@ -217,6 +217,36 @@ export class RoomService {
     });
   }
 
+  /**
+   * Release the card you picked (e.g. tapped by mistake). Refunds the entry fee, and if
+   * that leaves the round empty the countdown is cancelled — it restarts from scratch
+   * when someone picks again.
+   */
+  async deselectCard(user: User): Promise<RoomResult> {
+    return this.mutex.runExclusive('room:select', async () => {
+      const round = await this.currentRound();
+      if (round.status !== 'SELECTING') {
+        return { ok: false as const, reason: 'The round already started.' };
+      }
+      const mine = await this.rounds.findEntry(round.id, user.id);
+      if (!mine) return { ok: true as const };
+
+      await this.rounds.deleteEntry(mine.id);
+      if (round.entryFee > 0) {
+        await this.users.addCoins(user.id, round.entryFee);
+        await this.rounds.update(round.id, { pot: { decrement: round.entryFee } });
+      }
+
+      const remaining = await this.rounds.countEntries(round.id);
+      if (remaining === 0) {
+        this.timers.clearTimeout(T_PHASE);
+        await this.rounds.update(round.id, { selectionEndsAt: null });
+        this.logger.info({ roundId: round.id }, 'countdown cancelled — no players left');
+      }
+      return { ok: true as const };
+    });
+  }
+
   private scheduleStart(roundId: string, ms: number): void {
     this.timers.setTimeout(T_PHASE, () => void this.startRound(roundId), ms);
   }

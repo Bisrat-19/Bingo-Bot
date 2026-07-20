@@ -23,7 +23,7 @@ export function ActionBar({ state, busy, onBingo }: Props) {
       </div>
       <div className="stat">
         <div className="label">Coins</div>
-        <div className="value coins">{state.coins ?? '—'}</div>
+        <div className="value coins">{state.coins ?? 0}</div>
       </div>
       <div className="stat">
         <div className="label">Pot</div>

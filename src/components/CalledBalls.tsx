@@ -1,8 +1,9 @@
+import { memo } from 'react';
 import { columnOf, letterFor } from '@/lib/bingo';
 
 // The row of recently-called balls (newest first): each shows its LETTER + number,
 // colored by BINGO column.
-export function CalledBalls({ called }: { called: number[] }) {
+function CalledBallsImpl({ called }: { called: number[] }) {
   const recent = [...called].slice(-5).reverse();
   return (
     <div className="called-balls">
@@ -15,3 +16,8 @@ export function CalledBalls({ called }: { called: number[] }) {
     </div>
   );
 }
+
+export const CalledBalls = memo(
+  CalledBallsImpl,
+  (a, b) => a.called.length === b.called.length,
+);

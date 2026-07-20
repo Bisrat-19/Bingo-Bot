@@ -84,6 +84,10 @@ export class RoundRepository {
     return this.prisma.entry.update({ where: { id: entryId }, data: { cardNumber } });
   }
 
+  deleteEntry(entryId: string): Promise<unknown> {
+    return this.prisma.entry.delete({ where: { id: entryId } });
+  }
+
   findEntry(roundId: string, userId: string): Promise<EntryWithCardAndUser | null> {
     return this.prisma.entry.findUnique({
       where: { roundId_userId: { roundId, userId } },

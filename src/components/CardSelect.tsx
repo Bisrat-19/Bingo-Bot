@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Card } from './Card';
 
 interface Props {
@@ -9,13 +10,14 @@ interface Props {
   myCard: number[][] | null;
   busy: boolean;
   onSelect: (n: number) => void;
+  onDeselect: () => void;
 }
 
 /**
  * The card-selection screen: a grid of numbered cards. A card taken by someone else is
  * locked; your pick is highlighted. The 30s countdown starts when the FIRST player picks.
  */
-export function CardSelect({
+function CardSelectImpl({
   poolSize,
   taken,
   mine,
@@ -24,6 +26,7 @@ export function CardSelect({
   myCard,
   busy,
   onSelect,
+  onDeselect,
 }: Props) {
   const takenSet = new Set(taken);
 
@@ -60,7 +63,7 @@ export function CardSelect({
               key={n}
               className={cls}
               disabled={isTaken}
-              onPointerDown={() => onSelect(n)}
+              onPointerDown={() => (isMine ? onDeselect() : onSelect(n))}
               onClick={(e) => e.preventDefault()}
             >
               {n}
@@ -71,10 +74,21 @@ export function CardSelect({
 
       {mine != null && myCard && (
         <div className="my-pick">
-          <div className="my-pick-label">Your card · #{mine}</div>
+          <div className="my-pick-label">Your card · #{mine} — tap it again to release</div>
           <Card card={myCard} marked={[]} called={[]} onMark={() => {}} active={false} />
         </div>
       )}
     </div>
   );
 }
+
+export const CardSelect = memo(
+  CardSelectImpl,
+  (a, b) =>
+    a.mine === b.mine &&
+    a.onDeselect === b.onDeselect &&
+    a.secondsLeft === b.secondsLeft &&
+    a.playersCount === b.playersCount &&
+    a.taken.length === b.taken.length &&
+    a.myCard === b.myCard,
+);

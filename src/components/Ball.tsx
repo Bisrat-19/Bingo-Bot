@@ -17,7 +17,7 @@ export function Ball({ current, calledCount, countdownLeft, status }: Props) {
         {current != null && !counting && (
           <span className={`ball-letter col${columnOf(current)}`}>{letterFor(current)}</span>
         )}
-        <span className="ball-num">{counting ? countdownLeft : (current ?? '--')}</span>
+        <span className="ball-num">{counting ? countdownLeft : (current ?? '')}</span>
         <div className="ball-progress">{counting ? 'starting…' : `${calledCount}/75`}</div>
       </div>
     </div>

@@ -34,7 +34,7 @@ export function WaitingScreen({
       <div className="waiting-stats">
         <div className="wstat">
           <div className="wlabel">Current</div>
-          <div className="wvalue">{currentNumber ? callLabel(currentNumber) : '--'}</div>
+          <div className="wvalue">{currentNumber ? callLabel(currentNumber) : '·'}</div>
         </div>
         <div className="wstat">
           <div className="wlabel">Called</div>

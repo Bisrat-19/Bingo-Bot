@@ -13,7 +13,6 @@ import { CardSelect } from '@/components/CardSelect';
 import { WaitingScreen } from '@/components/WaitingScreen';
 import { ActionBar } from '@/components/ActionBar';
 import { WinnerOverlay } from '@/components/WinnerOverlay';
-import { AdminPanel } from '@/components/AdminPanel';
 import { RegisterScreen } from '@/components/RegisterScreen';
 
 type Res = ActionResult | { error: string };
@@ -27,7 +26,6 @@ export default function Page() {
   const [busy, setBusy] = useState(false);
   /** Optimistic pick so the tile highlights the instant it's tapped. */
   const [pendingCard, setPendingCard] = useState<number | null>(null);
-  const [adminOpen, setAdminOpen] = useState(false);
   /** Cells tapped locally, shown instantly while the request is in flight. */
   const [localMarks, setLocalMarks] = useState<Set<number>>(new Set());
 
@@ -36,6 +34,7 @@ export default function Page() {
   const toastTimer = useRef<number | undefined>(undefined);
   const inflight = useRef(false);
   const roundRef = useRef<string | null>(null);
+  const sigRef = useRef<string>('');
 
   useEffect(() => {
     initTelegram();
@@ -69,6 +68,15 @@ export default function Page() {
       setPendingCard(null);
       setLocalMarks(new Set());
     }
+    // Skip the React update when nothing meaningful changed — during PLAYING this drops
+    // re-renders from ~1/sec to one per drawn ball.
+    const sig = [
+      s.roundId, s.phase, s.secondsLeft, s.currentNumber, s.called.length,
+      s.takenCards.length, s.myCardNumber, s.marked.length, s.playersCount,
+      s.coins, s.pot, s.nextRoundInSec, s.winner?.cardNumber ?? '',
+    ].join('|');
+    if (sig === sigRef.current) return;
+    sigRef.current = sig;
     setState(s);
   }, []);
 
@@ -106,6 +114,15 @@ export default function Page() {
     },
     [state, refresh, showToast],
   );
+
+  const onDeselect = useCallback(async () => {
+    setPendingCard(null);
+    haptic('light');
+    const res = await api.deselect();
+    if (!isErr(res) && !res.ok) showToast(res.reason || 'Could not release the card');
+    else showToast('Card released');
+    void refresh();
+  }, [refresh, showToast]);
 
   const onMark = useCallback(
     (n: number) => {
@@ -172,11 +189,6 @@ export default function Page() {
         <div className="game-title">🎲 Bingo 75</div>
         <div className="top-right">
           {state.phase === 'PLAYING' && <div className="pill live">LIVE</div>}
-          {state.isAdmin && (
-            <button className="refresh-top admin-btn" onClick={() => setAdminOpen(true)} aria-label="settings">
-              ⚙
-            </button>
-          )}
           <button className="refresh-top" onClick={() => void refresh()} aria-label="refresh">
             ⟳
           </button>
@@ -196,6 +208,7 @@ export default function Page() {
             myCard={state.card}
             busy={busy}
             onSelect={onSelect}
+            onDeselect={onDeselect}
           />
         ) : spectating ? (
           <WaitingScreen
@@ -233,7 +246,6 @@ export default function Page() {
 
       <ActionBar state={state} busy={busy} onBingo={onBingo} />
 
-      {adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} onSaved={showToast} />}
       {toast && <div className="toast">{toast}</div>}
       {state.phase === 'FINISHED' && state.winner && (
         <WinnerOverlay
