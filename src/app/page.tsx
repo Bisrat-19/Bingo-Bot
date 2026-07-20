@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { haptic, initTelegram } from '@/lib/telegram';
+import { getTgProfile, haptic, initTelegram } from '@/lib/telegram';
+import { ensureSession } from '@/lib/session';
 import type { ActionResult, RoomState } from '@/lib/types';
 import { Ball } from '@/components/Ball';
 import { CalledBalls } from '@/components/CalledBalls';
@@ -12,6 +13,8 @@ import { CardSelect } from '@/components/CardSelect';
 import { WaitingScreen } from '@/components/WaitingScreen';
 import { ActionBar } from '@/components/ActionBar';
 import { WinnerOverlay } from '@/components/WinnerOverlay';
+import { AdminPanel } from '@/components/AdminPanel';
+import { RegisterScreen } from '@/components/RegisterScreen';
 
 type Res = ActionResult | { error: string };
 function isErr<T extends object>(r: T | { error: string }): r is { error: string } {
@@ -24,6 +27,9 @@ export default function Page() {
   const [busy, setBusy] = useState(false);
   /** Optimistic pick so the tile highlights the instant it's tapped. */
   const [pendingCard, setPendingCard] = useState<number | null>(null);
+  const [adminOpen, setAdminOpen] = useState(false);
+  /** Cells tapped locally, shown instantly while the request is in flight. */
+  const [localMarks, setLocalMarks] = useState<Set<number>>(new Set());
 
   const prevCalled = useRef<Set<number>>(new Set());
   const first = useRef(true);
@@ -61,15 +67,22 @@ export default function Page() {
     if (roundRef.current !== s.roundId) {
       roundRef.current = s.roundId;
       setPendingCard(null);
+      setLocalMarks(new Set());
     }
     setState(s);
   }, []);
 
-  // ~1s polling keeps selection and play in sync for everyone.
+  // Log in once (initData -> JWT), then poll ~1s to keep everyone in sync.
   useEffect(() => {
-    void refresh();
-    const id = window.setInterval(() => void refresh(), 1000);
-    return () => window.clearInterval(id);
+    let id: number | undefined;
+    void (async () => {
+      await ensureSession();
+      await refresh();
+      id = window.setInterval(() => void refresh(), 800);
+    })();
+    return () => {
+      if (id) window.clearInterval(id);
+    };
   }, [refresh]);
 
   const onSelect = useCallback(
@@ -95,24 +108,24 @@ export default function Page() {
   );
 
   const onMark = useCallback(
-    async (n: number) => {
+    (n: number) => {
       if (!state) return;
       if (!state.called.includes(n)) {
         haptic('error');
         showToast(`${n} not called yet!`);
         return;
       }
+      // Paint it instantly; the network round-trip happens in the background.
+      setLocalMarks((prev) => (prev.has(n) ? prev : new Set(prev).add(n)));
       haptic('light');
-      const res = await api.mark(n);
-      if (isErr(res)) showToast('Network error');
-      else if (!res.ok) showToast(res.reason || 'Could not mark');
-      void refresh();
+      void api.mark(n);
     },
-    [state, refresh, showToast],
+    [state, showToast],
   );
 
   const onBingo = async () => {
-    // De-dupe rapid presses without ever disabling the button.
+    // Fired on pointer-down for the lowest possible latency: with "first valid press
+    // wins", every millisecond counts. The ref de-dupes without disabling the button.
     if (inflight.current) return;
     inflight.current = true;
     haptic('light');
@@ -138,6 +151,16 @@ export default function Page() {
 
   if (!state) return <div className="loading">Connecting to the Bingo room…</div>;
 
+  if (!state.registered) {
+    const profile = getTgProfile();
+    return (
+      <div className="game">
+        <RegisterScreen name={profile.name} />
+        {toast && <div className="toast">{toast}</div>}
+      </div>
+    );
+  }
+
   const selecting = state.phase === 'SELECTING';
   // A player who opened the app mid-round has no card — they wait for the next round
   // instead of being dropped onto a board they can't play.
@@ -149,6 +172,11 @@ export default function Page() {
         <div className="game-title">🎲 Bingo 75</div>
         <div className="top-right">
           {state.phase === 'PLAYING' && <div className="pill live">LIVE</div>}
+          {state.isAdmin && (
+            <button className="refresh-top admin-btn" onClick={() => setAdminOpen(true)} aria-label="settings">
+              ⚙
+            </button>
+          )}
           <button className="refresh-top" onClick={() => void refresh()} aria-label="refresh">
             ⟳
           </button>
@@ -159,8 +187,10 @@ export default function Page() {
         {selecting ? (
           <CardSelect
             poolSize={state.poolSize}
-            taken={state.takenCards}
-            mine={state.myCardNumber ?? pendingCard}
+            taken={state.takenCards.filter(
+              (n) => n !== state.myCardNumber && n !== pendingCard,
+            )}
+            mine={pendingCard ?? state.myCardNumber}
             secondsLeft={state.secondsLeft}
             playersCount={state.playersCount}
             myCard={state.card}
@@ -191,7 +221,7 @@ export default function Page() {
               <Dashboard called={state.called} current={state.currentNumber} />
               <Card
                 card={state.card}
-                marked={state.marked}
+                marked={[...state.marked, ...localMarks]}
                 called={state.called}
                 onMark={onMark}
                 active={state.phase === 'PLAYING'}
@@ -203,6 +233,7 @@ export default function Page() {
 
       <ActionBar state={state} busy={busy} onBingo={onBingo} />
 
+      {adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} onSaved={showToast} />}
       {toast && <div className="toast">{toast}</div>}
       {state.phase === 'FINISHED' && state.winner && (
         <WinnerOverlay

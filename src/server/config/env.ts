@@ -16,7 +16,36 @@ const schema = z.object({
   MAX_PLAYERS: z.coerce.number().int().min(2).max(1000).default(20),
   FALSE_BINGO_COOLDOWN_SECONDS: z.coerce.number().int().min(0).max(300).default(30),
 
-  // ---- Continuous room ----
+  /// Secret used to sign session JWTs. Falls back to a value derived from BOT_TOKEN,
+  /// but set an explicit random secret in production.
+  JWT_SECRET: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length >= 16 ? v.trim() : undefined)),
+  /// Session lifetime in seconds (default 7 days).
+  SESSION_TTL_SECONDS: z.coerce.number().int().min(300).max(60 * 60 * 24 * 30).default(604800),
+  /// Max age of a Telegram initData payload we'll accept at login (replay protection).
+  INITDATA_MAX_AGE_SECONDS: z.coerce.number().int().min(60).max(86400).default(86400),
+
+  /// Bearer token for the standalone admin dashboard (sent as `Authorization: Bearer …`).
+  /// Leave empty to allow only Telegram-authenticated admins.
+  ADMIN_API_TOKEN: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() ? v.trim() : undefined)),
+
+  /// Comma-separated Telegram user IDs allowed to open the admin panel.
+  ADMIN_TELEGRAM_IDS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+
+  // ---- Continuous room (defaults; admins override these live in the DB) ----
   /// Seconds of card selection AFTER the first player picks a card.
   SELECTION_SECONDS: z.coerce.number().int().min(5).max(300).default(30),
   /// How long the winner is shown before the next round's selection opens.

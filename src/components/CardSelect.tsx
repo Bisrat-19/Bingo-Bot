@@ -56,7 +56,13 @@ export function CardSelect({
           // Only taken cards are disabled — never block on an in-flight request, so
           // rapid taps stay responsive.
           return (
-            <button key={n} className={cls} disabled={isTaken} onClick={() => onSelect(n)}>
+            <button
+              key={n}
+              className={cls}
+              disabled={isTaken}
+              onPointerDown={() => onSelect(n)}
+              onClick={(e) => e.preventDefault()}
+            >
               {n}
             </button>
           );

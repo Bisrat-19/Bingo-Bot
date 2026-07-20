@@ -48,7 +48,8 @@ export function Card({ card, marked, called, onMark, active }: Props) {
                   key={`${r}-${c}`}
                   className={cls}
                   disabled={!active || isMarked}
-                  onClick={() => onMark(n)}
+                  onPointerDown={() => onMark(n)}
+                  onClick={(e) => e.preventDefault()}
                 >
                   {n}
                 </button>

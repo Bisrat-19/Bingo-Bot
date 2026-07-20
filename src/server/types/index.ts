@@ -11,10 +11,19 @@ export enum GameStatus {
 }
 
 export enum WinningPattern {
-  HORIZONTAL = 'HORIZONTAL',
-  VERTICAL = 'VERTICAL',
-  DIAGONAL = 'DIAGONAL',
+  HORIZONTAL = 'HORIZONTAL', // any straight row
+  VERTICAL = 'VERTICAL', // any straight column
+  DIAGONAL = 'DIAGONAL', // either diagonal
+  FOUR_CORNERS = 'FOUR_CORNERS', // the four corner cells
+  FULL_HOUSE = 'FULL_HOUSE', // the whole card
 }
+
+/** Patterns enabled by default (admin can change these live). */
+export const DEFAULT_PATTERNS = [
+  WinningPattern.HORIZONTAL,
+  WinningPattern.VERTICAL,
+  WinningPattern.DIAGONAL,
+];
 
 // A Bingo card is a 5x5 matrix of numbers; the center (2,2) holds FREE (0).
 export type Card = number[][];

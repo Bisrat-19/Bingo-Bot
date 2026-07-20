@@ -14,6 +14,7 @@ import { StatisticsRepository } from './repositories/statistics.repository';
 import { UserRepository } from './repositories/user.repository';
 import { WinnerRepository } from './repositories/winner.repository';
 import { RoomService } from './services/RoomService';
+import { SettingsService } from './services/SettingsService';
 import { StatisticsService } from './services/StatisticsService';
 import { KeyedMutex } from './utils/Mutex';
 
@@ -22,6 +23,7 @@ export interface AppContainer {
   bot: Telegraf;
   room: RoomService;
   stats: StatisticsService;
+  settings: SettingsService;
   timers: TimerService;
   /** Set after getMe() during boot; used to build group deep links. */
   botUsername?: string;
@@ -43,6 +45,7 @@ export function buildContainer(): AppContainer {
   const caller = new NumberCaller();
 
   const stats = new StatisticsService(statsRepo);
+  const settings = new SettingsService(prisma);
   const room = new RoomService(
     userRepo,
     roundRepo,
@@ -54,10 +57,11 @@ export function buildContainer(): AppContainer {
     caller,
     timers,
     mutex,
+    settings,
     logger,
   );
 
-  const container: AppContainer = { bot, room, stats, timers };
+  const container: AppContainer = { bot, room, stats, settings, timers };
 
   bot.catch(makeErrorHandler(logger));
   registerHandlers(bot, room, stats, () => container.botUsername);

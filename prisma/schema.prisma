@@ -17,12 +17,37 @@ enum RoundStatus {
   FINISHED  // winner (or no winner) — shown briefly before the next round
 }
 
+/// Runtime-editable game configuration (single row, id = 1). Admins change these from
+/// the Mini App without a redeploy.
+model Settings {
+  id                    Int      @id @default(1)
+  selectionSeconds      Int      @default(30) // card-selection window after the first pick
+  drawIntervalSeconds   Int      @default(5) // gap between called numbers
+  winnerDisplaySeconds  Int      @default(8) // how long the winner splash shows
+  minPlayers            Int      @default(1) // players required to start a round
+  startingCoins         Int      @default(30) // coins a new player receives
+  entryFee              Int      @default(10) // coins charged to take a card
+  falseBingoCooldownSec Int      @default(0) // 0 = no cooldown, just an error message
+  /// Which patterns count as a win: HORIZONTAL, VERTICAL, DIAGONAL, FOUR_CORNERS, FULL_HOUSE
+  patterns              String[] @default(["HORIZONTAL", "VERTICAL", "DIAGONAL"])
+  updatedAt             DateTime @updatedAt
+
+  @@map("settings")
+}
+
 model User {
   id         String   @id @default(cuid())
   telegramId BigInt   @unique
   username   String?
   firstName  String?
-  createdAt  DateTime @default(now())
+  coins      Int      @default(30)
+  /// Blocked players can't join rounds (admin control).
+  blocked    Boolean  @default(false)
+  /// Explicit registration: a row can exist before the player registers, so the bot
+  /// knows whether to show the Register button or the main menu.
+  registered   Boolean   @default(false)
+  registeredAt DateTime?
+  createdAt    DateTime  @default(now())
 
   entries    Entry[]
   wins       Winner[]
@@ -51,6 +76,8 @@ model Round {
   winnerCardNo    Int?
   winnerPattern   String? // HORIZONTAL / VERTICAL / DIAGONAL
   winnerLine      Int[]   @default([]) // the numbers forming the winning line (for highlighting)
+  pot             Int     @default(0) // coins staked this round; paid to the winner
+  entryFee        Int     @default(0) // fee charged this round (snapshot of settings)
   startedAt       DateTime?
   endedAt         DateTime?
   createdAt       DateTime    @default(now())

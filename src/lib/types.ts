@@ -15,6 +15,11 @@ export interface RoomState {
   card: number[][] | null; // 5x5, 0 = FREE
   marked: number[];
   hasBingo: boolean;
+  registered: boolean;
+  coins: number | null;
+  entryFee: number;
+  pot: number;
+  isAdmin: boolean;
   winner: {
     name: string;
     cardNumber: number;
@@ -25,6 +30,25 @@ export interface RoomState {
   } | null;
   nextRoundInSec: number | null;
 }
+
+export interface GameSettings {
+  selectionSeconds: number;
+  drawIntervalSeconds: number;
+  winnerDisplaySeconds: number;
+  minPlayers: number;
+  startingCoins: number;
+  entryFee: number;
+  falseBingoCooldownSec: number;
+  patterns: string[];
+}
+
+export const ALL_PATTERNS = [
+  { key: 'HORIZONTAL', label: 'Horizontal line' },
+  { key: 'VERTICAL', label: 'Vertical line' },
+  { key: 'DIAGONAL', label: 'Diagonal' },
+  { key: 'FOUR_CORNERS', label: 'Four corners' },
+  { key: 'FULL_HOUSE', label: 'Full house' },
+];
 
 export interface ActionResult {
   ok: boolean;

@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+import crypto from 'crypto';
 import { config } from './config/env';
 import type { TgUser } from './types/index';
 
@@ -31,6 +31,13 @@ export function verifyInitData(initData: string): TgUser | null {
   const a = Buffer.from(computed, 'hex');
   const b = Buffer.from(hash, 'hex');
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+
+  // Replay protection: reject payloads older than the configured window.
+  const authDate = Number(params.get('auth_date'));
+  if (Number.isFinite(authDate) && authDate > 0) {
+    const ageSeconds = Math.floor(Date.now() / 1000) - authDate;
+    if (ageSeconds > config.INITDATA_MAX_AGE_SECONDS) return null;
+  }
 
   const userJson = params.get('user');
   if (!userJson) return null;

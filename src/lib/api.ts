@@ -1,23 +1,33 @@
-import type { ActionResult, RoomState } from './types';
-import { getDevUser, getInitData } from './telegram';
+import type { ActionResult, GameSettings, RoomState } from './types';
+import { getDevUser } from './telegram';
+import { clearSession, getToken, login } from './session';
 
-// Every request carries the raw initData (server-side HMAC auth). The dev fallback only
-// works when the backend runs in development.
-function body(extra?: Record<string, unknown>): string {
-  return JSON.stringify({
-    initData: getInitData(),
-    devUser: getDevUser(),
-    ...extra,
-  });
-}
+/**
+ * All calls carry our session JWT. If the server ever rejects it (expired/rotated),
+ * we transparently re-login with initData once and retry — so the player never sees
+ * an auth error mid-game.
+ */
+async function request<T>(
+  path: string,
+  extra?: Record<string, unknown>,
+  retry = true,
+): Promise<T | { error: string }> {
+  const token = getToken();
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (token) headers.authorization = `Bearer ${token}`;
 
-async function post<T>(path: string, extra?: Record<string, unknown>): Promise<T | { error: string }> {
   try {
     const res = await fetch('/api' + path, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: body(extra),
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({ devUser: getDevUser(), ...extra }),
     });
+
+    if (res.status === 401 && retry) {
+      clearSession();
+      if (await login()) return request<T>(path, extra, false);
+    }
     return (await res.json()) as T;
   } catch {
     return { error: 'network' };
@@ -25,8 +35,13 @@ async function post<T>(path: string, extra?: Record<string, unknown>): Promise<T
 }
 
 export const api = {
-  state: () => post<RoomState>('/room/state'),
-  select: (cardNumber: number) => post<ActionResult>('/room/select', { cardNumber }),
-  mark: (number: number) => post<ActionResult>('/room/mark', { number }),
-  bingo: () => post<ActionResult>('/room/bingo'),
+  state: () => request<RoomState>('/room/state'),
+  select: (cardNumber: number) => request<ActionResult>('/room/select', { cardNumber }),
+  mark: (number: number) => request<ActionResult>('/room/mark', { number }),
+  bingo: () => request<ActionResult>('/room/bingo'),
+
+  // Admin-only (server enforces membership via ADMIN_TELEGRAM_IDS).
+  getSettings: () => request<{ ok: boolean; settings: GameSettings; reason?: string }>('/admin/settings'),
+  saveSettings: (patch: Partial<GameSettings>) =>
+    request<{ ok: boolean; settings: GameSettings; reason?: string }>('/admin/settings', { patch }),
 };

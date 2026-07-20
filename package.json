@@ -1,12 +1,12 @@
 {
   "name": "telegram-bingo-bot",
   "version": "2.0.0",
-  "description": "Multiplayer Bingo — Telegram bot + Mini App in one Next.js app (Prisma, PostgreSQL).",
+  "description": "Multiplayer Bingo \u2014 Telegram bot + Mini App in one Next.js app (Prisma, PostgreSQL).",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p ${PORT:-3001}",
     "build": "prisma generate && next build",
-    "start": "next start",
+    "start": "next start -p ${PORT:-3001}",
     "lint": "next lint",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",

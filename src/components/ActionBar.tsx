@@ -22,13 +22,21 @@ export function ActionBar({ state, busy, onBingo }: Props) {
         <div className="value">{state.playersCount}</div>
       </div>
       <div className="stat">
-        <div className="label">Card</div>
-        <div className="value">{state.myCardNumber != null ? `#${state.myCardNumber}` : '—'}</div>
+        <div className="label">Coins</div>
+        <div className="value coins">{state.coins ?? '—'}</div>
+      </div>
+      <div className="stat">
+        <div className="label">Pot</div>
+        <div className="value">{state.pot}</div>
       </div>
       {playing && joined ? (
         // Never disabled — duplicate presses are de-duped in the handler so the button
         // always feels instant.
-        <button className="act-btn bingo" onClick={onBingo}>
+        <button
+          className="act-btn bingo"
+          onPointerDown={onBingo}
+          onClick={(e) => e.preventDefault()}
+        >
           Bingo
         </button>
       ) : (
