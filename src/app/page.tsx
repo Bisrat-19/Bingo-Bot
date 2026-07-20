@@ -3,27 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { haptic, initTelegram } from '@/lib/telegram';
-import type { ActionResult, GameStatus, WebState } from '@/lib/types';
+import type { ActionResult, RoomState } from '@/lib/types';
 import { Ball } from '@/components/Ball';
 import { CalledBalls } from '@/components/CalledBalls';
 import { Dashboard } from '@/components/Dashboard';
 import { Card } from '@/components/Card';
+import { CardSelect } from '@/components/CardSelect';
+import { WaitingScreen } from '@/components/WaitingScreen';
 import { ActionBar } from '@/components/ActionBar';
 import { WinnerOverlay } from '@/components/WinnerOverlay';
-
-const STATUS_LABEL: Record<GameStatus, { cls: string; label: string }> = {
-  WAITING_FOR_PLAYERS: { cls: 'wait', label: 'Lobby' },
-  CARD_GENERATED: { cls: 'wait', label: 'Lobby' },
-  COUNTDOWN: { cls: 'wait', label: 'Starting' },
-  PLAYING: { cls: 'live', label: 'LIVE' },
-  FINISHED: { cls: 'done', label: 'Finished' },
-  CANCELLED: { cls: '', label: 'Cancelled' },
-};
-
-function StatusPill({ status }: { status: GameStatus }) {
-  const s = STATUS_LABEL[status];
-  return <div className={'pill ' + s.cls}>{s.label}</div>;
-}
 
 type Res = ActionResult | { error: string };
 function isErr<T extends object>(r: T | { error: string }): r is { error: string } {
@@ -31,16 +19,18 @@ function isErr<T extends object>(r: T | { error: string }): r is { error: string
 }
 
 export default function Page() {
-  const [state, setState] = useState<WebState | null>(null);
+  const [state, setState] = useState<RoomState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [overlayClosed, setOverlayClosed] = useState(false);
+  /** Optimistic pick so the tile highlights the instant it's tapped. */
+  const [pendingCard, setPendingCard] = useState<number | null>(null);
 
   const prevCalled = useRef<Set<number>>(new Set());
   const first = useRef(true);
   const toastTimer = useRef<number | undefined>(undefined);
+  const inflight = useRef(false);
+  const roundRef = useRef<string | null>(null);
 
-  // Initialize the Telegram Apps SDK + runtime once, client-side.
   useEffect(() => {
     initTelegram();
     void import('@telegram-apps/sdk-react')
@@ -63,19 +53,46 @@ export default function Page() {
   const refresh = useCallback(async () => {
     const s = await api.state();
     if (isErr(s)) return;
-    // Buzz once when a new number is called.
     const newly = s.called.filter((n) => !prevCalled.current.has(n));
     if (newly.length && !first.current) haptic('light');
     prevCalled.current = new Set(s.called);
     first.current = false;
+    // A new round clears any optimistic pick.
+    if (roundRef.current !== s.roundId) {
+      roundRef.current = s.roundId;
+      setPendingCard(null);
+    }
     setState(s);
   }, []);
 
+  // ~1s polling keeps selection and play in sync for everyone.
   useEffect(() => {
     void refresh();
-    const id = window.setInterval(() => void refresh(), 1200);
+    const id = window.setInterval(() => void refresh(), 1000);
     return () => window.clearInterval(id);
   }, [refresh]);
+
+  const onSelect = useCallback(
+    async (n: number) => {
+      if (!state || state.phase !== 'SELECTING') return;
+      // Instant feedback: highlight immediately, then confirm with the server.
+      setPendingCard(n);
+      haptic('light');
+      const res = await api.select(n);
+      if (isErr(res)) {
+        setPendingCard(null);
+        showToast('Network error');
+      } else if (!res.ok) {
+        setPendingCard(null);
+        haptic('error');
+        showToast(res.reason || 'Could not pick that card');
+      } else {
+        showToast(`Card #${n} is yours 🎴`);
+      }
+      void refresh();
+    },
+    [state, refresh, showToast],
+  );
 
   const onMark = useCallback(
     async (n: number) => {
@@ -94,27 +111,13 @@ export default function Page() {
     [state, refresh, showToast],
   );
 
-  const run = useCallback(
-    async (fn: () => Promise<Res>, okMsg?: string) => {
-      setBusy(true);
-      const res = await fn();
-      setBusy(false);
-      if (isErr(res)) showToast('Network error');
-      else if (res.ok) {
-        if (okMsg) showToast(okMsg);
-      } else showToast(res.reason || 'Failed');
-      void refresh();
-    },
-    [refresh, showToast],
-  );
-
-  const onJoin = () => run(api.join, 'Joined! 🎴');
-  const onStart = () => run(api.start);
-
   const onBingo = async () => {
-    setBusy(true);
+    // De-dupe rapid presses without ever disabling the button.
+    if (inflight.current) return;
+    inflight.current = true;
+    haptic('light');
     const res = await api.bingo();
-    setBusy(false);
+    inflight.current = false;
     if (isErr(res)) showToast('Network error');
     else if (res.ok) {
       haptic('success');
@@ -122,6 +125,9 @@ export default function Page() {
     } else if (res.reason === 'invalid') {
       haptic('error');
       showToast("❌ Invalid Bingo — you don't have a line yet.");
+    } else if (res.reason === 'passed') {
+      haptic('error');
+      showToast('⏭️ Too late — that line passed! Finish another pattern.');
     } else if (res.reason === 'cooldown') {
       showToast(`⏳ Wait ${res.retryAfterSec}s before trying again.`);
     } else {
@@ -130,16 +136,19 @@ export default function Page() {
     void refresh();
   };
 
-  if (!state) return <div className="loading">Loading game…</div>;
+  if (!state) return <div className="loading">Connecting to the Bingo room…</div>;
 
-  const showWinner = state.status === 'FINISHED' && !!state.winner && !overlayClosed;
+  const selecting = state.phase === 'SELECTING';
+  // A player who opened the app mid-round has no card — they wait for the next round
+  // instead of being dropped onto a board they can't play.
+  const spectating = !selecting && state.myCardNumber == null;
 
   return (
     <div className="game">
       <header className="game-top">
         <div className="game-title">🎲 Bingo 75</div>
         <div className="top-right">
-          {state.status === 'PLAYING' && <StatusPill status={state.status} />}
+          {state.phase === 'PLAYING' && <div className="pill live">LIVE</div>}
           <button className="refresh-top" onClick={() => void refresh()} aria-label="refresh">
             ⟳
           </button>
@@ -147,32 +156,64 @@ export default function Page() {
       </header>
 
       <div className="stage">
-        <div className="ball-row">
-          <Ball
-            current={state.currentNumber}
+        {selecting ? (
+          <CardSelect
+            poolSize={state.poolSize}
+            taken={state.takenCards}
+            mine={state.myCardNumber ?? pendingCard}
+            secondsLeft={state.secondsLeft}
+            playersCount={state.playersCount}
+            myCard={state.card}
+            busy={busy}
+            onSelect={onSelect}
+          />
+        ) : spectating ? (
+          <WaitingScreen
+            currentNumber={state.currentNumber}
             calledCount={state.called.length}
-            countdownLeft={state.countdownLeft}
-            status={state.status}
+            playersCount={state.playersCount}
+            finished={state.phase === 'FINISHED'}
+            nextRoundInSec={state.nextRoundInSec}
           />
-          <CalledBalls called={state.called} />
-        </div>
+        ) : (
+          <>
+            <div className="ball-row">
+              <Ball
+                current={state.currentNumber}
+                calledCount={state.called.length}
+                countdownLeft={null}
+                status={state.phase}
+              />
+              <CalledBalls called={state.called} />
+            </div>
 
-        <div className="playrow">
-          <Dashboard called={state.called} current={state.currentNumber} />
-          <Card
-            card={state.card}
-            marked={state.marked}
-            called={state.called}
-            onMark={onMark}
-            active={state.status === 'PLAYING'}
-          />
-        </div>
+            <div className="playrow">
+              <Dashboard called={state.called} current={state.currentNumber} />
+              <Card
+                card={state.card}
+                marked={state.marked}
+                called={state.called}
+                onMark={onMark}
+                active={state.phase === 'PLAYING'}
+              />
+            </div>
+          </>
+        )}
       </div>
 
-      <ActionBar state={state} busy={busy} onJoin={onJoin} onStart={onStart} onBingo={onBingo} />
+      <ActionBar state={state} busy={busy} onBingo={onBingo} />
 
       {toast && <div className="toast">{toast}</div>}
-      {showWinner && <WinnerOverlay name={state.winner!.name} onClose={() => setOverlayClosed(true)} />}
+      {state.phase === 'FINISHED' && state.winner && (
+        <WinnerOverlay
+          name={state.winner.name}
+          cardNumber={state.winner.cardNumber}
+          pattern={state.winner.pattern}
+          line={state.winner.line}
+          card={state.winner.card}
+          nextIn={state.nextRoundInSec}
+        />
+      )}
     </div>
   );
 }

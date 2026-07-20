@@ -1,11 +1,10 @@
-import type { ActionResult, WebState } from './types';
-import { getDevUser, getGameId, getInitData } from './telegram';
+import type { ActionResult, RoomState } from './types';
+import { getDevUser, getInitData } from './telegram';
 
-// All requests carry the raw initData (server-side HMAC auth) + gameId. The dev fallback
-// only works when the backend runs in development.
+// Every request carries the raw initData (server-side HMAC auth). The dev fallback only
+// works when the backend runs in development.
 function body(extra?: Record<string, unknown>): string {
   return JSON.stringify({
-    gameId: getGameId(),
     initData: getInitData(),
     devUser: getDevUser(),
     ...extra,
@@ -26,10 +25,8 @@ async function post<T>(path: string, extra?: Record<string, unknown>): Promise<T
 }
 
 export const api = {
-  state: () => post<WebState>('/state'),
-  join: () => post<ActionResult>('/join'),
-  start: () => post<ActionResult>('/start'),
-  mark: (number: number) => post<ActionResult>('/mark', { number }),
-  bingo: () => post<ActionResult>('/bingo'),
-  leave: () => post<ActionResult>('/leave'),
+  state: () => post<RoomState>('/room/state'),
+  select: (cardNumber: number) => post<ActionResult>('/room/select', { cardNumber }),
+  mark: (number: number) => post<ActionResult>('/room/mark', { number }),
+  bingo: () => post<ActionResult>('/room/bingo'),
 };

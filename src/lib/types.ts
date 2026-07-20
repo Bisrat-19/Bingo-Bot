@@ -1,33 +1,29 @@
-// Mirrors the WebState DTO returned by the backend /api/state endpoint.
-export type GameStatus =
-  | 'WAITING_FOR_PLAYERS'
-  | 'CARD_GENERATED'
-  | 'COUNTDOWN'
-  | 'PLAYING'
-  | 'FINISHED'
-  | 'CANCELLED';
+// Mirrors the RoomState DTO returned by /api/room/state.
+export type RoomPhase = 'SELECTING' | 'PLAYING' | 'FINISHED';
 
-export interface PlayerView {
-  name: string;
-  marks: number;
-  hasBingo: boolean;
-  isWinner: boolean;
-}
-
-export interface WebState {
-  gameId: string;
-  status: GameStatus;
-  currentNumber: number | null;
+export interface RoomState {
+  roundId: string;
+  phase: RoomPhase;
+  /** Selection countdown; null until the first player picks a card. */
+  secondsLeft: number | null;
+  poolSize: number;
+  takenCards: number[];
+  myCardNumber: number | null;
+  playersCount: number;
   called: number[];
-  countdownLeft: number | null;
-  minPlayers: number;
-  isHost: boolean;
-  joined: boolean;
+  currentNumber: number | null;
   card: number[][] | null; // 5x5, 0 = FREE
   marked: number[];
   hasBingo: boolean;
-  players: PlayerView[];
-  winner: { name: string } | null;
+  winner: {
+    name: string;
+    cardNumber: number;
+    pattern: string | null;
+    /** Numbers forming the winning line — highlighted on the winner's card. */
+    line: number[];
+    card: number[][] | null;
+  } | null;
+  nextRoundInSec: number | null;
 }
 
 export interface ActionResult {
@@ -35,4 +31,6 @@ export interface ActionResult {
   reason?: string;
   retryAfterSec?: number;
   pattern?: string;
+  cardNumber?: number;
+  number?: number;
 }

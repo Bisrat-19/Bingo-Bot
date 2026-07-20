@@ -1,5 +1,6 @@
-// Prisma schema for the multiplayer Bingo bot.
-// Run `npx prisma migrate dev` to create the tables.
+// Prisma schema — continuous global Bingo room.
+// One always-running room cycles: SELECTING (30s after first pick) -> PLAYING -> FINISHED
+// (winner shown briefly) -> next round.
 
 generator client {
   provider = "prisma-client-js"
@@ -10,13 +11,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum GameStatus {
-  WAITING_FOR_PLAYERS
-  CARD_GENERATED
-  COUNTDOWN
-  PLAYING
-  FINISHED
-  CANCELLED
+enum RoundStatus {
+  SELECTING // card selection open
+  PLAYING   // numbers being called
+  FINISHED  // winner (or no winner) — shown briefly before the next round
 }
 
 model User {
@@ -26,77 +24,84 @@ model User {
   firstName  String?
   createdAt  DateTime @default(now())
 
-  players     Player[]
-  hostedGames Game[]      @relation("HostGames")
-  wins        Winner[]
-  statistics  Statistics?
+  entries    Entry[]
+  wins       Winner[]
+  statistics Statistics?
 
   @@map("users")
 }
 
-model Game {
-  id             String     @id @default(cuid())
-  chatId         BigInt // Telegram group where the game runs
-  status         GameStatus @default(WAITING_FOR_PLAYERS)
-  hostId         String
-  host           User       @relation("HostGames", fields: [hostId], references: [id])
-  intervalMs     Int        @default(10000)
-  countdownSec   Int        @default(60)
-  maxPlayers     Int        @default(20)
-  minPlayers     Int        @default(2)
-  patterns       String[] // enabled winning-pattern keys
-  currentNumber  Int?
-  winnerId       String? // scalar (not FK) so the winner-claim update stays atomic
-  lobbyMessageId Int? // group lobby message we keep editing
-  startedAt      DateTime?
-  endedAt        DateTime?
-  createdAt      DateTime   @default(now())
+/// The FIXED catalog of 100 playable cards. Card #7 always has the same numbers.
+model BingoCard {
+  number  Int  @id // 1..100
+  numbers Json // 5x5 matrix, 0 = FREE centre
 
-  players       Player[]
-  calledNumbers CalledNumber[]
-  winner        Winner?
+  entries Entry[]
 
-  @@index([chatId, status])
-  @@map("games")
+  @@map("bingo_cards")
 }
 
-model Player {
-  id            String    @id @default(cuid())
-  userId        String
-  user          User      @relation(fields: [userId], references: [id])
-  gameId        String
-  game          Game      @relation(fields: [gameId], references: [id], onDelete: Cascade)
-  card          Json // 5x5 matrix of numbers (0 = FREE center)
-  markedNumbers Int[]     @default([]) // numbers the player has daubed
-  hasBingo      Boolean   @default(false) // server-detected valid pattern (informational)
-  cardMessageId Int? // the DM message showing their card
-  joinedAt      DateTime  @default(now())
-  leftAt        DateTime?
+model Round {
+  id              String      @id @default(cuid())
+  status          RoundStatus @default(SELECTING)
+  /// When the 30s selection window closes. Set when the FIRST player picks a card.
+  selectionEndsAt DateTime?
+  currentNumber   Int?
+  winnerId        String? // scalar (not FK) so the winner claim stays a single atomic update
+  winnerCardNo    Int?
+  winnerPattern   String? // HORIZONTAL / VERTICAL / DIAGONAL
+  winnerLine      Int[]   @default([]) // the numbers forming the winning line (for highlighting)
+  startedAt       DateTime?
+  endedAt         DateTime?
+  createdAt       DateTime    @default(now())
 
-  @@unique([userId, gameId]) // prevents duplicate joins
-  @@index([gameId])
-  @@map("players")
+  entries Entry[]
+  calls   Call[]
+  winner  Winner?
+
+  @@index([status])
+  @@map("rounds")
 }
 
-model CalledNumber {
+/// A player's participation in one round, holding the card they picked.
+model Entry {
+  id         String   @id @default(cuid())
+  roundId    String
+  round      Round    @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  cardNumber Int
+  card       BingoCard @relation(fields: [cardNumber], references: [number])
+  marked     Int[]    @default([])
+  hasBingo   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@unique([roundId, cardNumber]) // one card can be held by only ONE player per round
+  @@unique([roundId, userId]) // and each player holds only ONE card per round
+  @@index([roundId])
+  @@map("entries")
+}
+
+model Call {
   id       String   @id @default(cuid())
-  gameId   String
-  game     Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  roundId  String
+  round    Round    @relation(fields: [roundId], references: [id], onDelete: Cascade)
   number   Int
   order    Int // 1-based draw order
   calledAt DateTime @default(now())
 
-  @@unique([gameId, number]) // a number is never called twice
-  @@index([gameId])
-  @@map("called_numbers")
+  @@unique([roundId, number]) // a number is never called twice in a round
+  @@index([roundId])
+  @@map("calls")
 }
 
 model Winner {
   id            String   @id @default(cuid())
-  gameId        String   @unique
-  game          Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  roundId       String   @unique
+  round         Round    @relation(fields: [roundId], references: [id], onDelete: Cascade)
   userId        String
   user          User     @relation(fields: [userId], references: [id])
+  cardNumber    Int
   pattern       String // HORIZONTAL / VERTICAL / DIAGONAL
   numbersCalled Int
   durationMs    Int

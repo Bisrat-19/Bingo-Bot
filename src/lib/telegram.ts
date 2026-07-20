@@ -43,12 +43,6 @@ export function getInitData(): string {
   return wa()?.initData ?? '';
 }
 
-export function getGameId(): string {
-  const fromUrl = new URLSearchParams(location.search).get('gameId');
-  if (fromUrl) return fromUrl;
-  return wa()?.initDataUnsafe?.start_param ?? '';
-}
-
 // Dev-only fallback so the UI can be exercised in a plain browser (?devUser=123).
 export function getDevUser(): string | undefined {
   return new URLSearchParams(location.search).get('devUser') ?? undefined;

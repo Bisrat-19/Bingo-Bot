@@ -1,8 +1,9 @@
 import type { PrismaClient, Winner } from '@prisma/client';
 
 export interface CreateWinnerInput {
-  gameId: string;
+  roundId: string;
   userId: string;
+  cardNumber: number;
   pattern: string;
   numbersCalled: number;
   durationMs: number;

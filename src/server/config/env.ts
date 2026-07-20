@@ -16,6 +16,14 @@ const schema = z.object({
   MAX_PLAYERS: z.coerce.number().int().min(2).max(1000).default(20),
   FALSE_BINGO_COOLDOWN_SECONDS: z.coerce.number().int().min(0).max(300).default(30),
 
+  // ---- Continuous room ----
+  /// Seconds of card selection AFTER the first player picks a card.
+  SELECTION_SECONDS: z.coerce.number().int().min(5).max(300).default(30),
+  /// How long the winner is shown before the next round's selection opens.
+  WINNER_DISPLAY_SECONDS: z.coerce.number().int().min(2).max(60).default(8),
+  /// Size of the fixed card catalog.
+  CARD_POOL_SIZE: z.coerce.number().int().min(10).max(500).default(100),
+
   // Web / Mini App
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   // Public HTTPS base URL of the Mini App (e.g. a cloudflared tunnel). When set, the
