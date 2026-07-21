@@ -88,11 +88,40 @@ export class RoundRepository {
     return this.prisma.entry.delete({ where: { id: entryId } });
   }
 
-  findEntry(roundId: string, userId: string): Promise<EntryWithCardAndUser | null> {
-    return this.prisma.entry.findUnique({
-      where: { roundId_userId: { roundId, userId } },
+  /**
+   * Every card this player holds in the round, oldest first.
+   *
+   * A player may hold several cards, so this is the primary lookup; anything that needs
+   * "the" card of a player must decide for itself which one it means.
+   */
+  findEntries(roundId: string, userId: string): Promise<EntryWithCardAndUser[]> {
+    return this.prisma.entry.findMany({
+      where: { roundId, userId },
+      include: { card: true, user: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /** One specific card held by this player, or null. */
+  findEntryByCard(
+    roundId: string,
+    userId: string,
+    cardNumber: number,
+  ): Promise<EntryWithCardAndUser | null> {
+    return this.prisma.entry.findFirst({
+      where: { roundId, userId, cardNumber },
       include: { card: true, user: true },
     });
+  }
+
+  /** Distinct players in the round (not cards). */
+  async countPlayers(roundId: string): Promise<number> {
+    const rows = await this.prisma.entry.findMany({
+      where: { roundId },
+      select: { userId: true },
+      distinct: ['userId'],
+    });
+    return rows.length;
   }
 
   listEntries(roundId: string): Promise<EntryWithCardAndUser[]> {
@@ -113,6 +142,14 @@ export class RoundRepository {
 
   countEntries(roundId: string): Promise<number> {
     return this.prisma.entry.count({ where: { roundId } });
+  }
+
+  /** Replace the marked list outright (used for bulk marking). */
+  setMarks(entryId: string, numbers: number[]): Promise<Entry> {
+    return this.prisma.entry.update({
+      where: { id: entryId },
+      data: { marked: [...new Set(numbers)] },
+    });
   }
 
   addMark(entryId: string, number: number): Promise<Entry> {

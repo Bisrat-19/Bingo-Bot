@@ -205,7 +205,7 @@ export class WalletService {
         where: { id: tx.id },
         data: { status: 'REJECTED', adminNote: 'Insufficient balance at request time' },
       });
-      return { ok: false, reason: 'Not enough coins for that withdrawal.' };
+      return { ok: false, reason: 'Not enough birr for that withdrawal.' };
     }
 
     this.logger.info({ txId: tx.id, amount: tx.amount }, 'withdrawal requested (coins held)');

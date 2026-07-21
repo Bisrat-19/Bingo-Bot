@@ -8,12 +8,16 @@ export interface RoomState {
   secondsLeft: number | null;
   poolSize: number;
   takenCards: number[];
-  myCardNumber: number | null;
+  /** Every card this player holds this round, in the order they took them. */
+  myCards: { cardNumber: number; card: number[][]; marked: number[]; hasBingo: boolean }[];
+  /** How many cards one player may hold (admin configurable). */
+  maxCards: number;
+  /** Distinct players in the round. */
   playersCount: number;
+  /** Total cards in play, which is what the pot is built from. */
+  cardsCount: number;
   called: number[];
   currentNumber: number | null;
-  card: number[][] | null; // 5x5, 0 = FREE
-  marked: number[];
   hasBingo: boolean;
   registered: boolean;
   coins: number | null;
@@ -42,6 +46,7 @@ export interface GameSettings {
   entryFee: number;
   falseBingoCooldownSec: number;
   patterns: string[];
+  maxCardsPerPlayer: number;
 }
 
 export const ALL_PATTERNS = [

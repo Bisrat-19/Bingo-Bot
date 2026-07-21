@@ -1,4 +1,5 @@
 import type { PrismaClient, Settings } from '@prisma/client';
+import { type SupportItem, parseSupport } from '../content/defaults';
 
 export interface EditableSettings {
   selectionSeconds: number;
@@ -14,8 +15,14 @@ export interface EditableSettings {
   houseCutPercent: number;
   minDeposit: number;
   minWithdrawal: number;
+  /** How many cards one player may hold in a round. */
+  maxCardsPerPlayer: number;
   /** Telebirr number shown on the deposit screen. */
   depositPhone: string;
+  /** Support contacts shown by the Support button. */
+  supportItems: SupportItem[];
+  /** Instructions text. Empty falls back to the built-in default. */
+  instructionsText: string;
 }
 
 export const VALID_PATTERNS = [
@@ -34,9 +41,12 @@ const LIMITS: Record<keyof EditableSettings, [number, number]> = {
   minPlayers: [1, 100],
   startingCoins: [0, 1_000_000],
   entryFee: [0, 1_000_000],
+  maxCardsPerPlayer: [1, 20],
   falseBingoCooldownSec: [0, 300],
   patterns: [0, 0], // handled separately (not numeric)
   depositPhone: [0, 0], // handled separately (not numeric)
+  supportItems: [0, 0], // handled separately (not numeric)
+  instructionsText: [0, 0], // handled separately (not numeric)
   houseCutPercent: [1, 100],
   minDeposit: [1, 1_000_000],
   minWithdrawal: [1, 1_000_000],
@@ -68,12 +78,14 @@ export class SettingsService {
 
   /** Apply a partial update, clamped to safe bounds. Returns the new settings. */
   async update(patch: Partial<EditableSettings>): Promise<Settings> {
-    const data: Record<string, number | string | string[]> = {};
+    const data: Record<string, number | string | string[] | SupportItem[]> = {};
     for (const [key, [min, max]] of Object.entries(LIMITS) as [
       keyof EditableSettings,
       [number, number],
     ][]) {
-      if (key === 'patterns' || key === 'depositPhone') continue; // not numeric
+      // Non-numeric fields are handled below.
+      if (key === 'patterns' || key === 'depositPhone') continue;
+      if (key === 'supportItems' || key === 'instructionsText') continue;
       const value = patch[key];
       if (value === undefined || value === null) continue;
       const n = Math.round(Number(value));
@@ -92,6 +104,20 @@ export class SettingsService {
     if (typeof patch.depositPhone === 'string' && patch.depositPhone.trim()) {
       data.depositPhone = patch.depositPhone.trim().slice(0, 32);
     }
+
+    // Support contacts: drop blank rows and cap the list so the message stays readable.
+    if (Array.isArray(patch.supportItems)) {
+      data.supportItems = patch.supportItems
+        .map((i) => ({ label: String(i?.label ?? '').trim().slice(0, 40), handle: String(i?.handle ?? '').trim().slice(0, 64) }))
+        .filter((i) => i.label && i.handle)
+        .slice(0, 20);
+    }
+
+    // Instructions: an empty string is meaningful (it restores the built-in default),
+    // so unlike the phone number this is not skipped when blank.
+    if (typeof patch.instructionsText === 'string') {
+      data.instructionsText = patch.instructionsText.slice(0, 4000);
+    }
     const row = await this.prisma.settings.upsert({
       where: { id: 1 },
       create: { id: 1, ...data },
@@ -100,6 +126,11 @@ export class SettingsService {
     this.cache = row;
     this.cachedAt = Date.now();
     return row;
+  }
+
+  /** Support contacts, already falling back to the defaults. */
+  async support(): Promise<SupportItem[]> {
+    return parseSupport((await this.get()).supportItems);
   }
 
   /** Drop the cache so the next read is fresh. */

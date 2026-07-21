@@ -15,8 +15,9 @@ const FIELDS: { key: NumericKey; label: string; hint: string }[] = [
   { key: 'drawIntervalSeconds', label: 'Draw interval', hint: 'seconds between numbers' },
   { key: 'winnerDisplaySeconds', label: 'Winner display', hint: 'seconds before next round' },
   { key: 'minPlayers', label: 'Minimum players', hint: 'needed to start a round' },
-  { key: 'startingCoins', label: 'Starting coins', hint: 'given to new players' },
-  { key: 'entryFee', label: 'Entry fee', hint: 'coins charged per card' },
+  { key: 'startingCoins', label: 'Starting birr', hint: 'given to new players' },
+  { key: 'entryFee', label: 'Entry fee', hint: 'birr charged per card' },
+  { key: 'maxCardsPerPlayer', label: 'Cards per player', hint: 'how many cards one player may hold' },
   { key: 'falseBingoCooldownSec', label: 'Wrong-bingo cooldown', hint: '0 = no cooldown' },
 ];
 

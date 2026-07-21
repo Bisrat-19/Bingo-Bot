@@ -7,27 +7,9 @@ import type { RoomService } from '../services/RoomService';
 import type { StatisticsService } from '../services/StatisticsService';
 import { BTN, mainMenuKeyboard, phoneKeyboard, registerKeyboard } from '../telegram/menus';
 import { displayName, esc } from '../utils/format';
+import { DEFAULT_INSTRUCTIONS, type SupportItem } from '../content/defaults';
 
 // The bot is the entry point; the game itself lives in the Mini App (one continuous room).
-
-const HELP = [
-  '🎲 <b>Bingo 75 — how it works</b>',
-  '',
-  '1️⃣ Pick one of the <b>100 cards</b> — one card per player.',
-  '2️⃣ When the first player picks, a countdown starts.',
-  '3️⃣ The round starts automatically and numbers are called.',
-  '4️⃣ Mark called numbers, complete a line, and press <b>BINGO</b> first to win!',
-  '',
-  '⚠️ You must press BINGO on the number that <b>completes</b> your line — if another',
-  'number is called first, that line has passed and you need a different pattern.',
-  '',
-  'The room never stops — a new round begins right after each winner.',
-].join('\n');
-
-// Only Support is still a placeholder.
-const COMING_SOON: Record<string, string> = {
-  [BTN.support]: '📞 <b>Support</b>\n\nComing soon.',
-};
 
 const CANCEL = '❌ Cancel';
 
@@ -80,7 +62,7 @@ export function registerHandlers(
       `✅ <b>Registration complete!</b>\n\n` +
         `Name: <b>${esc(updated.firstName ?? 'player')}</b>\n` +
         `Phone: <code>${esc(phone)}</code>\n` +
-        `Balance: <b>${updated.coins}</b> coins\n\n` +
+        `Balance: <b>${updated.coins}</b> birr\n\n` +
         `Tap <b>${BTN.play}</b> to join the live Bingo room.`,
       { parse_mode: 'HTML', ...(menu ?? {}) },
     );
@@ -114,7 +96,23 @@ export function registerHandlers(
     await completeRegistration(ctx, ctx.message.contact.phone_number);
   });
 
-  bot.help((ctx) => ctx.reply(HELP, { parse_mode: 'HTML' }));
+  /** Instructions text: whatever the admin saved, or the built-in default. */
+  const instructionsText = async () => {
+    const s = await settings.get();
+    return s.instructionsText?.trim() ? s.instructionsText : DEFAULT_INSTRUCTIONS;
+  };
+
+  /** Support contacts, rendered as a numbered list. */
+  const supportText = async () => {
+    const items = await settings.support();
+    return [
+      '📞 <b>support</b>',
+      '',
+      ...items.map((it, i) => `${i + 1}. ${esc(it.label)}: ${esc(it.handle)}`),
+    ].join('\n');
+  };
+
+  bot.help(async (ctx) => ctx.reply(await instructionsText(), { parse_mode: 'HTML' }));
 
   bot.command('menu', async (ctx) => {
     const user = await ensure(ctx);
@@ -125,18 +123,19 @@ export function registerHandlers(
     });
   });
 
-  // Instructions is the one placeholder with real content.
-  bot.hears(BTN.instructions, (ctx) => ctx.reply(HELP, { parse_mode: 'HTML' }));
+  // Both of these render admin-editable content, so changing them never needs a deploy.
+  bot.hears(BTN.instructions, async (ctx) =>
+    ctx.reply(await instructionsText(), { parse_mode: 'HTML' }),
+  );
 
-  // Everything else that isn't built yet — one handler, O(1) lookup.
-  bot.hears(Object.keys(COMING_SOON), async (ctx) => {
+  bot.hears(BTN.support, async (ctx) => {
     const user = await ensure(ctx);
     if (!user?.registered) {
       const kb = registerKeyboard();
       await ctx.reply(`Please tap ${BTN.register} first.`, { ...(kb ?? {}) });
       return;
     }
-    await ctx.reply(COMING_SOON[ctx.message.text] ?? 'Coming soon.', {
+    await ctx.reply(await supportText(), {
       parse_mode: 'HTML',
       ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}),
     });
@@ -148,7 +147,7 @@ export function registerHandlers(
     const user = await ensure(ctx);
     if (!user?.registered) return;
     await ctx.reply(
-      `💳 <b>Your balance</b>\n\n<b>${user.coins}</b> coins\n<i>1 coin = 1 birr</i>`,
+      `💳 <b>Your balance</b>\n\n<b>${user.coins}</b> birr`,
       { parse_mode: 'HTML' },
     );
   });
@@ -178,14 +177,14 @@ export function registerHandlers(
     const s = await settings.get();
     if (user.coins < s.minWithdrawal) {
       await ctx.reply(
-        `💸 <b>Withdraw</b>\n\nYou need at least <b>${s.minWithdrawal}</b> coins. You have <b>${user.coins}</b>.`,
+        `💸 <b>Withdraw</b>\n\nYou need at least <b>${s.minWithdrawal}</b> birr. You have <b>${user.coins}</b>.`,
         { parse_mode: 'HTML' },
       );
       return;
     }
     startWizard(ctx.from.id, 'withdraw');
     await ctx.reply(
-      `💸 <b>Withdraw</b>\n\nBalance: <b>${user.coins}</b> coins\nMinimum: <b>${s.minWithdrawal}</b>\n\n` +
+      `💸 <b>Withdraw</b>\n\nBalance: <b>${user.coins}</b> birr\nMinimum: <b>${s.minWithdrawal}</b>\n\n` +
         `👤 What is your <b>full name</b>?`,
       { parse_mode: 'HTML', ...cancelKb },
     );
@@ -255,6 +254,53 @@ export function registerHandlers(
       const key = wiz.configKey;
       clearWizard(ctx.from.id);
 
+      const menuKb = mainMenuKeyboard(user.id, user.telegramId) ?? {};
+
+      if (key === 'instructions') {
+        // "reset" clears the override so the built-in text comes back.
+        const next = text.toLowerCase() === 'reset' ? '' : ctx.message.text;
+        await settings.update({ instructionsText: next });
+        await ctx.reply(
+          next ? '✅ Instructions updated. Players see this now:' : '✅ Restored the built-in instructions:',
+          { parse_mode: 'HTML', ...menuKb },
+        );
+        // Show the result so a broken tag is obvious immediately, not to a player later.
+        await ctx
+          .reply(await instructionsText(), { parse_mode: 'HTML' })
+          .catch(() =>
+            ctx.reply(
+              '⚠️ Saved, but Telegram could not render it. Check your <b>&lt;b&gt;</b> tags are closed.',
+              { parse_mode: 'HTML' },
+            ),
+          );
+        await showAdminPanel(ctx);
+        return;
+      }
+
+      if (key === 'supAdd' || key.startsWith('supEdit:')) {
+        const m = text.match(/^(\S+)\s+(\S+)$/);
+        if (!m) {
+          return void ctx.reply('Send it as <code>label @handle</code>.', {
+            parse_mode: 'HTML',
+            ...menuKb,
+          });
+        }
+        const [, label, handle] = m;
+        const items = await settings.support();
+        if (key === 'supAdd') items.push({ label, handle });
+        else {
+          const i = Number(key.split(':')[1]);
+          if (items[i]) items[i] = { label, handle };
+        }
+        await saveSupport(items);
+        await ctx.reply(`✅ Saved <b>${esc(label)}: ${esc(handle)}</b>`, {
+          parse_mode: 'HTML',
+          ...menuKb,
+        });
+        await showSupportPanel(ctx);
+        return;
+      }
+
       if (key === 'bonusAll' || key === 'bonusUser') {
         const menu = mainMenuKeyboard(user.id, user.telegramId) ?? {};
 
@@ -280,13 +326,13 @@ export function registerHandlers(
             return void ctx.reply('❌ Amount must be at least 1.', { ...menu });
           }
           await ctx.reply(
-            `🎁 Gave <b>${amount}</b> coins to ${esc(displayName(target))}.\nTheir balance: <b>${balance}</b>`,
+            `🎁 Gave <b>${amount}</b> birr to ${esc(displayName(target))}.\nTheir balance: <b>${balance}</b>`,
             { parse_mode: 'HTML', ...menu },
           );
           await ctx.telegram
             .sendMessage(
               target.telegramId.toString(),
-              `🎁 <b>You received a bonus!</b>\n\n<b>+${amount}</b> coins have been added to your balance.\n💳 New balance: <b>${balance}</b>`,
+              `🎁 <b>You received a bonus!</b>\n\n<b>+${amount}</b> birr has been added to your balance.\n💳 New balance: <b>${balance}</b>`,
               { parse_mode: 'HTML' },
             )
             .catch(() => {}); // the player may have blocked the bot — the coins are still theirs
@@ -300,7 +346,7 @@ export function registerHandlers(
         }
         const { credited, failed } = await wallet.giveBonusToAll(amount);
         await ctx.reply(
-          `🎁 Gave <b>${amount}</b> coins to <b>${credited.length}</b> player(s).` +
+          `🎁 Gave <b>${amount}</b> birr to <b>${credited.length}</b> player(s).` +
             (failed > 0 ? `\n⚠️ ${failed} failed — check the logs.` : ''),
           { parse_mode: 'HTML', ...menu },
         );
@@ -310,7 +356,7 @@ export function registerHandlers(
             await ctx.telegram
               .sendMessage(
                 c.telegramId.toString(),
-                `🎁 <b>Bonus for everyone!</b>\n\n<b>+${amount}</b> coins have been added to your balance.\n💳 New balance: <b>${c.balance}</b>`,
+                `🎁 <b>Bonus for everyone!</b>\n\n<b>+${amount}</b> birr has been added to your balance.\n💳 New balance: <b>${c.balance}</b>`,
                 { parse_mode: 'HTML' },
               )
               .catch(() => {});
@@ -386,7 +432,7 @@ export function registerHandlers(
 
       // withdrawal: holds the coins immediately
       if (amount > user.coins) {
-        return void ctx.reply(`You only have ${user.coins} coins.`);
+        return void ctx.reply(`You only have ${user.coins} birr.`);
       }
       const res = await wallet.createWithdrawal({
         userId: user.id,
@@ -402,7 +448,7 @@ export function registerHandlers(
       await ctx.reply(
         `✅ <b>Withdrawal requested</b>\n\nAmount: <b>${amount}</b> birr\nTo: <b>${wiz.phone}</b>\n` +
           `Reference: <code>${res.tx.id.slice(-8)}</code>\n\n` +
-          `The coins are on hold. You'll be notified once the money is sent.`,
+          `The birr is on hold. You'll be notified once the money is sent.`,
         { parse_mode: 'HTML', ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}) },
       );
       await notifyAdmins(res.tx.id);
@@ -423,8 +469,9 @@ export function registerHandlers(
     { key: 'drawIntervalSeconds', label: 'Draw interval', unit: 's' },
     { key: 'winnerDisplaySeconds', label: 'Winner display', unit: 's' },
     { key: 'minPlayers', label: 'Min players' },
-    { key: 'startingCoins', label: 'Starting coins' },
+    { key: 'startingCoins', label: 'Starting birr' },
     { key: 'entryFee', label: 'Entry fee' },
+    { key: 'maxCardsPerPlayer', label: 'Cards per player' },
     { key: 'houseCutPercent', label: 'House cut', unit: '%' },
     { key: 'minDeposit', label: 'Min deposit' },
     { key: 'minWithdrawal', label: 'Min withdrawal' },
@@ -472,6 +519,10 @@ export function registerHandlers(
       Markup.button.callback('🎁 Bonus — everyone', 'cfg:bonusAll'),
       Markup.button.callback('🎁 Bonus — one player', 'cfg:bonusUser'),
     ]);
+    rows.push([
+      Markup.button.callback('📞 Support contacts', 'cfg:support'),
+      Markup.button.callback('📖 Instructions', 'cfg:instructions'),
+    ]);
     rows.push([Markup.button.callback('🛑 Close game & start new', 'cfg:reset')]);
     return { text, kb: Markup.inlineKeyboard(rows) };
   };
@@ -480,6 +531,69 @@ export function registerHandlers(
     const { text, kb } = await adminPanel();
     await ctx.reply(text, { parse_mode: 'HTML', ...kb });
   };
+
+  /**
+   * Support contacts editor: one row per contact with an edit and a remove button,
+   * so an admin never has to retype the whole list to change one entry.
+   */
+  const showSupportPanel = async (ctx: Context) => {
+    const items = await settings.support();
+    const rows = items.map((it, i) => [
+      Markup.button.callback(`✏️ ${it.label}: ${it.handle}`, `sup:edit:${i}`),
+      Markup.button.callback('🗑', `sup:del:${i}`),
+    ]);
+    rows.push([Markup.button.callback('➕ Add contact', 'sup:add')]);
+    rows.push([Markup.button.callback('⬅️ Back', 'cfg:refresh')]);
+
+    await ctx.reply(
+      [
+        '📞 <b>Support contacts</b>',
+        '',
+        'This is what players see:',
+        '',
+        ...items.map((it, i) => `${i + 1}. ${esc(it.label)}: ${esc(it.handle)}`),
+        '',
+        '<i>Tap a contact to edit it, or 🗑 to remove it.</i>',
+      ].join('\n'),
+      { parse_mode: 'HTML', ...Markup.inlineKeyboard(rows) },
+    );
+  };
+
+  /** Persist a new contact list. */
+  const saveSupport = (items: SupportItem[]) => settings.update({ supportItems: items });
+
+  bot.action(/^sup:(add|edit|del):?(\d+)?$/, async (ctx) => {
+    if (!isAdmin(ctx)) return void ctx.answerCbQuery('Admins only.', { show_alert: true });
+    const m = ctx.match as unknown as RegExpExecArray;
+    const action = m[1];
+    const index = m[2] != null ? Number(m[2]) : -1;
+    const items = await settings.support();
+
+    if (action === 'del') {
+      if (items.length <= 1) {
+        return void ctx.answerCbQuery('Keep at least one contact.', { show_alert: true });
+      }
+      const removed = items[index];
+      await saveSupport(items.filter((_, i) => i !== index));
+      await ctx.answerCbQuery(`Removed ${removed?.label ?? 'contact'}`);
+      await showSupportPanel(ctx);
+      return;
+    }
+
+    // Add and edit share one wizard; the index decides which.
+    startWizard(ctx.from.id, 'config');
+    setWizard(ctx.from.id, { step: 'value', configKey: action === 'add' ? 'supAdd' : `supEdit:${index}` });
+    await ctx.answerCbQuery();
+    const current = action === 'edit' ? items[index] : undefined;
+    await ctx.reply(
+      (current
+        ? `✏️ Editing <b>${esc(current.label)}: ${esc(current.handle)}</b>\n\n`
+        : '➕ <b>New support contact</b>\n\n') +
+        'Send it as <b>label</b> then <b>handle</b>, separated by a space.\n\n' +
+        '<i>Examples:</i>\n<code>support @ciroobingosupport</code>\n<code>chanel @ciroobingo9</code>',
+      { parse_mode: 'HTML', ...Markup.keyboard([[CANCEL]]).resize() },
+    );
+  });
 
   bot.hears(BTN.admin, async (ctx) => {
     if (!isAdmin(ctx)) return;
@@ -552,13 +666,36 @@ export function registerHandlers(
       return;
     }
 
+    if (key === 'support') {
+      await ctx.answerCbQuery();
+      await showSupportPanel(ctx);
+      return;
+    }
+
+    if (key === 'instructions') {
+      startWizard(ctx.from.id, 'config');
+      setWizard(ctx.from.id, { step: 'value', configKey: 'instructions' });
+      await ctx.answerCbQuery();
+      await ctx.reply('📖 <b>Instructions</b>\n\nThis is what players see now:', {
+        parse_mode: 'HTML',
+      });
+      await ctx.reply(await instructionsText(), { parse_mode: 'HTML' });
+      await ctx.reply(
+        'Send the <b>new instructions</b> text to replace it.\n\n' +
+          'You may use <code>&lt;b&gt;bold&lt;/b&gt;</code> and <code>&lt;i&gt;italic&lt;/i&gt;</code>.\n' +
+          'Send <code>reset</code> to restore the built-in text.',
+        { parse_mode: 'HTML', ...Markup.keyboard([[CANCEL]]).resize() },
+      );
+      return;
+    }
+
     if (key === 'bonusAll' || key === 'bonusUser') {
       startWizard(ctx.from.id, 'config');
       setWizard(ctx.from.id, { step: 'value', configKey: key });
       await ctx.answerCbQuery();
       await ctx.reply(
         key === 'bonusAll'
-          ? '🎁 <b>Bonus for everyone</b>\n\nSend the amount of coins to give <b>each registered player</b>.\n\n<i>Example:</i> <code>50</code>'
+          ? '🎁 <b>Bonus for everyone</b>\n\nSend the amount of birr to give <b>each registered player</b>.\n\n<i>Example:</i> <code>50</code>'
           : '🎁 <b>Bonus for one player</b>\n\nSend the player and the amount, separated by a space.\n\n' +
               '<i>Examples:</i>\n<code>@username 50</code>\n<code>1233811688 50</code>',
         { parse_mode: 'HTML', ...Markup.keyboard([[CANCEL]]).resize() },

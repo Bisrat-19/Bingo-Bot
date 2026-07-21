@@ -4,17 +4,42 @@ import type { TgUser } from '../types/index';
 export class UserRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
-  /** Ensure a User row exists, seeding new players with the configured starting coins. */
+  /**
+   * Ensure a User row exists, seeding new players with the configured starting coins.
+   *
+   * The seed is written to the ledger in the same transaction, so a player's balance
+   * always equals the sum of their ledger entries. Without this, every account starts
+   * life with coins that no audit can explain.
+   */
   async upsertFromTelegram(u: TgUser, startingCoins: number): Promise<User> {
-    return this.prisma.user.upsert({
-      where: { telegramId: u.telegramId },
-      create: {
-        telegramId: u.telegramId,
-        username: u.username,
-        firstName: u.firstName,
-        coins: startingCoins,
-      },
-      update: { username: u.username, firstName: u.firstName },
+    const existing = await this.prisma.user.findUnique({ where: { telegramId: u.telegramId } });
+    if (existing) {
+      return this.prisma.user.update({
+        where: { id: existing.id },
+        data: { username: u.username, firstName: u.firstName },
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          telegramId: u.telegramId,
+          username: u.username,
+          firstName: u.firstName,
+          coins: startingCoins,
+        },
+      });
+      if (startingCoins > 0) {
+        await tx.ledgerEntry.create({
+          data: {
+            userId: created.id,
+            delta: startingCoins,
+            balanceAfter: startingCoins,
+            reason: 'SIGNUP_BONUS',
+          },
+        });
+      }
+      return created;
     });
   }
 
@@ -34,23 +59,10 @@ export class UserRepository {
     });
   }
 
-  /**
-   * Atomically charge coins. Conditional on the balance being sufficient, so two
-   * concurrent charges can never overdraw an account.
-   */
-  async chargeCoins(userId: string, amount: number): Promise<boolean> {
-    if (amount <= 0) return true;
-    const res = await this.prisma.user.updateMany({
-      where: { id: userId, coins: { gte: amount } },
-      data: { coins: { decrement: amount } },
-    });
-    return res.count === 1;
-  }
-
-  async addCoins(userId: string, amount: number): Promise<void> {
-    if (amount <= 0) return;
-    await this.prisma.user.update({ where: { id: userId }, data: { coins: { increment: amount } } });
-  }
+  // NOTE: coin movements deliberately do NOT live here. Every credit and debit goes
+  // through WalletService, which writes the matching ledger entry in the same
+  // transaction. A "quick" helper on this repository would be a silent way to move
+  // money without an audit trail.
 
   async coins(userId: string): Promise<number> {
     const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { coins: true } });

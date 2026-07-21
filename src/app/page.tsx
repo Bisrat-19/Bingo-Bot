@@ -25,13 +25,24 @@ export default function Page() {
   const [toast, setToast] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** Optimistic pick so the tile highlights the instant it's tapped. */
-  const [pendingCard, setPendingCard] = useState<number | null>(null);
+  const [pendingCards, setPendingCards] = useState<Set<number>>(new Set());
+  /** Cards being released, hidden immediately so the tap feels instant. */
+  const [releasing, setReleasing] = useState<Set<number>>(new Set());
   /** Cells tapped locally, shown instantly while the request is in flight. */
-  const [localMarks, setLocalMarks] = useState<Set<number>>(new Set());
+  const [localMarks, setLocalMarks] = useState<Map<number, Set<number>>>(new Map());
   /** Flips the BINGO button the moment it's pressed, before the server answers. */
   const [claiming, setClaiming] = useState(false);
+  /**
+   * MANUAL: you tap the numbers and press BINGO (the original behaviour).
+   * AUTO:   called numbers are daubed for you and BINGO is pressed the moment one of
+   *         your cards completes a line.
+   */
+  const [mode, setMode] = useState<'manual' | 'auto'>('manual');
 
   const prevCalled = useRef<Set<number>>(new Set());
+  /** Drives the adaptive poll rate (fast while picking, calmer while playing). */
+  const phaseRef = useRef<string>('');
+  const pace = useRef<() => void>(() => {});
   const first = useRef(true);
   const toastTimer = useRef<number | undefined>(undefined);
   const inflight = useRef(false);
@@ -67,19 +78,73 @@ export default function Page() {
     // A new round clears any optimistic pick.
     if (roundRef.current !== s.roundId) {
       roundRef.current = s.roundId;
-      setPendingCard(null);
-      setLocalMarks(new Set());
+      setPendingCards(new Set());
+      setReleasing(new Set());
+      setLocalMarks(new Map());
     }
     // Skip the React update when nothing meaningful changed — during PLAYING this drops
     // re-renders from ~1/sec to one per drawn ball.
     const sig = [
       s.roundId, s.phase, s.secondsLeft, s.currentNumber, s.called.length,
-      s.takenCards.length, s.myCardNumber, s.marked.length, s.playersCount,
+      s.takenCards.join(','), s.myCards.map((c) => c.cardNumber).join(','),
+      s.myCards.reduce((n, c) => n + c.marked.length, 0),
+      s.myCards.map((c) => (c.hasBingo ? 1 : 0)).join(''), s.playersCount,
       s.coins, s.pot, s.winAmount, s.entryFee, s.nextRoundInSec, s.winner?.cardNumber ?? '',
     ].join('|');
+    phaseRef.current = s.phase;
+    pace.current();
     if (sig === sigRef.current) return;
     sigRef.current = sig;
     setState(s);
+    // A release is confirmed once the card is no longer ours; drop the local override
+    // so re-picking the same card works immediately.
+    setReleasing((prev) => {
+      if (prev.size === 0) return prev;
+      const held = new Set(s.myCards.map((c) => c.cardNumber));
+      const next = new Set([...prev].filter((n) => held.has(n)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, []);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('bingo_mode');
+      if (saved === 'auto' || saved === 'manual') setMode(saved);
+    } catch {
+      /* storage can be unavailable; manual is a safe default */
+    }
+  }, []);
+
+  const stateRef = useRef<RoomState | null>(null);
+  stateRef.current = state;
+
+  const changeMode = useCallback((next: 'manual' | 'auto') => {
+    const cur = stateRef.current;
+
+    // Leaving AUTO: everything it daubed becomes a real mark, so the card carries on
+    // from where it was instead of appearing to reset to blank.
+    if (next === 'manual' && cur && cur.phase === 'PLAYING') {
+      const called = new Set(cur.called);
+      setLocalMarks((prev) => {
+        const carried = new Map(prev);
+        for (const c of cur.myCards) {
+          const hits = c.card.flat().filter((n) => n !== 0 && called.has(n));
+          if (hits.length === 0) continue;
+          carried.set(c.cardNumber, new Set([...(carried.get(c.cardNumber) ?? []), ...hits]));
+          // Persist too, so a reload does not lose them.
+          void api.mark(0, c.cardNumber, hits);
+        }
+        return carried;
+      });
+    }
+
+    setMode(next);
+    try {
+      localStorage.setItem('bingo_mode', next);
+    } catch {
+      /* ignore */
+    }
+    haptic('light');
   }, []);
 
   // Log in once (initData -> JWT), then poll ~1s to keep everyone in sync.
@@ -88,7 +153,19 @@ export default function Page() {
     void (async () => {
       await ensureSession();
       await refresh();
-      id = window.setInterval(() => void refresh(), 800);
+      // Selection is the competitive part: cards must grey out almost as they are
+      // taken. During play a ball only lands every few seconds, so a slower poll is
+      // plenty and keeps the battery cost down.
+      let current = 0;
+      const schedule = () => {
+        const want = phaseRef.current === 'SELECTING' ? 450 : 900;
+        if (want === current) return;
+        current = want;
+        if (id) window.clearInterval(id);
+        id = window.setInterval(() => void refresh(), want);
+      };
+      schedule();
+      pace.current = schedule;
     })();
     return () => {
       if (id) window.clearInterval(id);
@@ -99,50 +176,76 @@ export default function Page() {
     async (n: number) => {
       if (!state || state.phase !== 'SELECTING') return;
       // Instant feedback: highlight immediately, then confirm with the server.
-      setPendingCard(n);
+      setPendingCards((prev) => new Set(prev).add(n));
       haptic('light');
       const res = await api.select(n);
+      const undo = () =>
+        setPendingCards((prev) => {
+          const next = new Set(prev);
+          next.delete(n);
+          return next;
+        });
       if (isErr(res)) {
-        setPendingCard(null);
+        undo();
         showToast('Network error');
       } else if (!res.ok) {
-        setPendingCard(null);
+        undo();
         haptic('error');
         showToast(res.reason || 'Could not pick that card');
-      } else {
-        showToast(`Card #${n} is yours 🎴`);
       }
       void refresh();
     },
     [state, refresh, showToast],
   );
 
-  const onDeselect = useCallback(async () => {
-    setPendingCard(null);
-    haptic('light');
-    const res = await api.deselect();
-    if (!isErr(res) && !res.ok) showToast(res.reason || 'Could not release the card');
-    else showToast('Card released');
-    void refresh();
-  }, [refresh, showToast]);
+  const onDeselect = useCallback(
+    async (n: number) => {
+      // Drop it from the grid on the same frame as the tap; the server confirms after.
+      setPendingCards((prev) => {
+        const next = new Set(prev);
+        next.delete(n);
+        return next;
+      });
+      setReleasing((prev) => new Set(prev).add(n));
+      haptic('light');
+      const res = await api.deselect(n);
+      if (!isErr(res) && !res.ok) {
+        // Put it back: the server refused, so the card is still ours.
+        setReleasing((prev) => {
+          const next = new Set(prev);
+          next.delete(n);
+          return next;
+        });
+        showToast(res.reason || 'Could not release the card');
+      }
+      void refresh();
+    },
+    [refresh, showToast],
+  );
 
   const onMark = useCallback(
-    (n: number) => {
+    (n: number, cardNumber: number) => {
       if (!state) return;
       if (!state.called.includes(n)) {
         haptic('error');
         showToast(`${n} not called yet!`);
         return;
       }
-      // Paint it instantly; the network round-trip happens in the background.
-      setLocalMarks((prev) => (prev.has(n) ? prev : new Set(prev).add(n)));
+      // Paint it instantly on THAT card only; the network round-trip happens after.
+      setLocalMarks((prev) => {
+        const forCard = prev.get(cardNumber);
+        if (forCard?.has(n)) return prev;
+        const next = new Map(prev);
+        next.set(cardNumber, new Set(forCard ?? []).add(n));
+        return next;
+      });
       haptic('light');
-      void api.mark(n);
+      void api.mark(n, cardNumber);
     },
     [state, showToast],
   );
 
-  const onBingo = async () => {
+  const onBingo = useCallback(async (auto = false) => {
     // Fired on pointer-down for the lowest possible latency: with "first valid press
     // wins", every millisecond counts. The ref de-dupes without disabling the button.
     if (inflight.current) return;
@@ -152,10 +255,18 @@ export default function Page() {
     const res = await api.bingo();
     inflight.current = false;
     setClaiming(false);
-    if (isErr(res)) showToast('Network error');
-    else if (res.ok) {
+    if (isErr(res)) {
+      if (!auto) showToast('Network error');
+    } else if (res.ok) {
       haptic('success');
-      showToast('🎉 BINGO! You win!');
+      showToast(
+        res.cardNumber != null
+          ? `🎉 BINGO on card #${res.cardNumber}! You win!`
+          : '🎉 BINGO! You win!',
+      );
+    } else if (auto) {
+      // An auto attempt that misses is normal (someone else was first, or the line had
+      // already passed). Staying silent keeps the screen calm instead of nagging.
     } else if (res.reason === 'invalid') {
       haptic('error');
       showToast("❌ Invalid Bingo — you don't have a line yet.");
@@ -168,7 +279,22 @@ export default function Page() {
       showToast(res.reason || 'Not yet!');
     }
     void refresh();
-  };
+  }, [refresh, showToast]);
+
+  /**
+   * AUTO mode: claim the moment the server says one of your cards completed a line on
+   * the ball just called. It keys off `currentNumber`, so it fires at most once per
+   * ball and never spams the server after a miss.
+   */
+  const autoTried = useRef<string>('');
+  useEffect(() => {
+    if (mode !== 'auto' || !state) return;
+    if (state.phase !== 'PLAYING' || !state.hasBingo) return;
+    const key = `${state.roundId}:${state.currentNumber}`;
+    if (autoTried.current === key) return;
+    autoTried.current = key;
+    void onBingo(true);
+  }, [mode, state, onBingo]);
 
   if (!state) return <div className="loading">Connecting to the Bingo room…</div>;
 
@@ -183,19 +309,38 @@ export default function Page() {
   }
 
   const selecting = state.phase === 'SELECTING';
+  // Confirmed cards plus any pick still in flight, so the grid never flickers.
+  const myCardNumbers = [
+    ...new Set([...state.myCards.map((c) => c.cardNumber), ...pendingCards]),
+  ]
+    .filter((n) => !releasing.has(n))
+    .sort((a, b) => a - b);
   // A player who opened the app mid-round has no card — they wait for the next round
   // instead of being dropped onto a board they can't play.
-  const spectating = !selecting && state.myCardNumber == null;
+  const spectating = !selecting && state.myCards.length === 0;
 
   return (
     <div className="game">
       <header className="game-top">
         <div className="game-title">🎲 Bingo 75</div>
+        <div className="mode-toggle" role="group" aria-label="Play mode">
+          <button
+            className={mode === 'manual' ? 'on' : ''}
+            onPointerDown={() => changeMode('manual')}
+            onClick={(e) => e.preventDefault()}
+          >
+            Manual
+          </button>
+          <button
+            className={mode === 'auto' ? 'on' : ''}
+            onPointerDown={() => changeMode('auto')}
+            onClick={(e) => e.preventDefault()}
+          >
+            Auto
+          </button>
+        </div>
         <div className="top-right">
           {state.phase === 'PLAYING' && <div className="pill live">LIVE</div>}
-          <button className="refresh-top" onClick={() => void refresh()} aria-label="refresh">
-            ⟳
-          </button>
         </div>
       </header>
 
@@ -203,12 +348,12 @@ export default function Page() {
         {selecting ? (
           <CardSelect
             poolSize={state.poolSize}
-            taken={state.takenCards.filter(
-              (n) => n !== state.myCardNumber && n !== pendingCard,
-            )}
-            mine={pendingCard ?? state.myCardNumber}
+            taken={state.takenCards.filter((n) => !myCardNumbers.includes(n))}
+            mine={myCardNumbers}
+            maxCards={state.maxCards}
             secondsLeft={state.secondsLeft}
             playersCount={state.playersCount}
+            entryFee={state.entryFee}
             busy={busy}
             onSelect={onSelect}
             onDeselect={onDeselect}
@@ -235,13 +380,30 @@ export default function Page() {
 
             <div className="playrow">
               <Dashboard called={state.called} current={state.currentNumber} />
-              <Card
-                card={state.card}
-                marked={[...state.marked, ...localMarks]}
-                called={state.called}
-                onMark={onMark}
-                active={state.phase === 'PLAYING'}
-              />
+              {/* Every card the player bought, laid out in a row. */}
+              <div className="my-cards">
+                {state.myCards.map((c) => (
+                  <div className={'my-card' + (c.hasBingo ? ' ready' : '')} key={c.cardNumber}>
+                    {state.myCards.length > 1 && (
+                      <div className="my-card-tag">
+                        #{c.cardNumber}
+                        {c.hasBingo && <span className="ready-flag">BINGO</span>}
+                      </div>
+                    )}
+                    <Card
+                      card={c.card}
+                      marked={
+                        mode === 'auto'
+                          ? state.called
+                          : [...c.marked, ...(localMarks.get(c.cardNumber) ?? [])]
+                      }
+                      called={state.called}
+                      onMark={mode === 'auto' ? undefined : (n) => onMark(n, c.cardNumber)}
+                      active={state.phase === 'PLAYING'}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           </>
         )}

@@ -30,12 +30,12 @@ export interface RoomState {
   secondsLeft: number | null;
   poolSize: number;
   takenCards: number[];
-  myCardNumber: number | null;
+  myCards: { cardNumber: number; card: Card; marked: number[]; hasBingo: boolean }[];
+  maxCards: number;
   playersCount: number;
+  cardsCount: number;
   called: number[];
   currentNumber: number | null;
-  card: Card | null;
-  marked: number[];
   hasBingo: boolean;
   /** Registration + coin economy */
   registered: boolean;
@@ -168,6 +168,36 @@ export class RoomService {
     this.roundCache = null;
   }
 
+  /**
+   * Record that a player is still here.
+   *
+   * ANY interaction counts, not just a state poll: someone who just paid for a card is
+   * obviously present, and a brief gap in polling (backgrounded tab, flaky network)
+   * must not let the room decide the round was abandoned.
+   */
+  private touch(userId: string): void {
+    this.presence.set(userId, Date.now());
+  }
+
+  /**
+   * The whole card catalog, for the selection-screen preview.
+   *
+   * The catalog never changes, so it is read once and then served from memory. Sending
+   * it to the client in one go means tapping a card previews instantly, with no request
+   * per tap and nothing to wait for.
+   */
+  private catalogCache: { number: number; card: Card }[] | null = null;
+
+  async catalogCards(): Promise<{ number: number; card: Card }[]> {
+    if (this.catalogCache) return this.catalogCache;
+    const rows = await this.catalog.all();
+    this.catalogCache = rows.map((r) => ({
+      number: r.number,
+      card: r.numbers as unknown as Card,
+    }));
+    return this.catalogCache;
+  }
+
   /** Called numbers, served from memory after the first read. */
   private async getCalls(roundId: string): Promise<number[]> {
     const hit = this.callsCache.get(roundId);
@@ -197,46 +227,61 @@ export class RoomService {
       if (!user.registered) {
         return { ok: false as const, reason: 'Please register first (press Register in the bot).' };
       }
+      this.touch(user.id);
       if (user.blocked) {
         return { ok: false as const, reason: 'Your account is blocked from playing.' };
       }
 
       const s = await this.settings.get();
       const taken = await this.rounds.takenCardNumbers(round.id);
-      const mine = await this.rounds.findEntry(round.id, user.id);
-      if (taken.includes(cardNumber) && mine?.cardNumber !== cardNumber) {
+      const mine = await this.rounds.findEntries(round.id, user.id);
+      const alreadyMine = mine.find((e) => e.cardNumber === cardNumber);
+
+      // Tapping a card you already hold is a no-op, not an error.
+      if (alreadyMine) return { ok: true as const, cardNumber };
+
+      if (taken.includes(cardNumber)) {
         return { ok: false as const, reason: `Card ${cardNumber} is already taken.` };
       }
 
       const wasEmpty = taken.length === 0;
+      const max = Math.max(1, s.maxCardsPerPlayer);
 
-      if (mine) {
-        // Switching cards within the round is free — they already paid.
-        try {
-          await this.rounds.updateEntryCard(mine.id, cardNumber);
-        } catch {
-          return { ok: false as const, reason: `Card ${cardNumber} was just taken.` };
+      // With a one-card limit, tapping a different card MOVES you to it for free — the
+      // long-standing behaviour, and the only sensible reading of the tap.
+      if (mine.length >= max) {
+        if (max === 1 && mine.length === 1) {
+          try {
+            await this.rounds.updateEntryCard(mine[0].id, cardNumber);
+          } catch {
+            return { ok: false as const, reason: `Card ${cardNumber} was just taken.` };
+          }
+          return { ok: true as const, cardNumber };
         }
-      } else {
-        // New entry: charge the entry fee first (atomic, can't overdraw).
-        const paid = await this.wallet.debit(user.id, s.entryFee, 'ENTRY_FEE', round.id);
-        if (paid === null) {
-          return {
-            ok: false as const,
-            reason: `Not enough coins — you need ${s.entryFee} to play.`,
-          };
-        }
-        try {
-          await this.rounds.createEntry(round.id, user.id, cardNumber);
-          await this.rounds.update(round.id, {
-            pot: { increment: s.entryFee },
-            entryFee: s.entryFee,
-          });
-          this.invalidateRound();
-        } catch {
-          await this.wallet.credit(user.id, s.entryFee, 'ROUND_REFUND', round.id); // refund
-          return { ok: false as const, reason: `Card ${cardNumber} was just taken.` };
-        }
+        return {
+          ok: false as const,
+          reason: `You can hold at most ${max} cards. Tap one of yours to release it.`,
+        };
+      }
+
+      // Each extra card costs its own entry fee. Charge first (atomic, can't overdraw).
+      const paid = await this.wallet.debit(user.id, s.entryFee, 'ENTRY_FEE', round.id);
+      if (paid === null) {
+        return {
+          ok: false as const,
+          reason: `Not enough birr. You need ${s.entryFee} for another card.`,
+        };
+      }
+      try {
+        await this.rounds.createEntry(round.id, user.id, cardNumber);
+        await this.rounds.update(round.id, {
+          pot: { increment: s.entryFee },
+          entryFee: s.entryFee,
+        });
+        this.invalidateRound();
+      } catch {
+        await this.wallet.credit(user.id, s.entryFee, 'ROUND_REFUND', round.id); // refund
+        return { ok: false as const, reason: `Card ${cardNumber} was just taken.` };
       }
 
       // First pick of the round opens the selection window.
@@ -256,21 +301,27 @@ export class RoomService {
    * that leaves the round empty the countdown is cancelled — it restarts from scratch
    * when someone picks again.
    */
-  async deselectCard(user: User): Promise<RoomResult> {
+  async deselectCard(user: User, cardNumber?: number): Promise<RoomResult> {
     return this.mutex.runExclusive('room:select', async () => {
       const round = await this.currentRound();
       if (round.status !== 'SELECTING') {
         return { ok: false as const, reason: 'The round already started.' };
       }
-      const mine = await this.rounds.findEntry(round.id, user.id);
-      if (!mine) return { ok: true as const };
 
-      await this.rounds.deleteEntry(mine.id);
-      if (round.entryFee > 0) {
-        await this.wallet.credit(user.id, round.entryFee, 'ROUND_REFUND', round.id);
-        await this.rounds.update(round.id, { pot: { decrement: round.entryFee } });
-        this.invalidateRound();
+      // A specific card, or all of them when none is named.
+      const held = await this.rounds.findEntries(round.id, user.id);
+      const dropping =
+        cardNumber != null ? held.filter((e) => e.cardNumber === cardNumber) : held;
+      if (dropping.length === 0) return { ok: true as const };
+
+      for (const entry of dropping) {
+        await this.rounds.deleteEntry(entry.id);
+        if (round.entryFee > 0) {
+          await this.wallet.credit(user.id, round.entryFee, 'ROUND_REFUND', round.id);
+          await this.rounds.update(round.id, { pot: { decrement: round.entryFee } });
+        }
       }
+      this.invalidateRound();
 
       const remaining = await this.rounds.countEntries(round.id);
       if (remaining === 0) {
@@ -357,16 +408,30 @@ export class RoomService {
     }
   }
 
-  /** Mark a called number on the player's card (server-verified). */
-  async markNumber(user: User, number: number): Promise<RoomResult<{ number: number }>> {
+  /**
+   * Mark a called number on one of the player's cards (server-verified).
+   *
+   * `cardNumber` says which card was tapped. Without it the number is marked on every
+   * card of the player that contains it, which is what a single-card player expects.
+   */
+  async markNumber(
+    user: User,
+    number: number,
+    cardNumber?: number,
+  ): Promise<RoomResult<{ number: number }>> {
     const round = await this.currentRound();
     if (round.status !== 'PLAYING') return { ok: false, reason: 'The round is not running.' };
 
-    const entry = await this.rounds.findEntry(round.id, user.id);
-    if (!entry) return { ok: false, reason: 'You are not in this round.' };
+    const held = await this.rounds.findEntries(round.id, user.id);
+    if (held.length === 0) return { ok: false, reason: 'You are not in this round.' };
+    this.touch(user.id);
 
-    const card = entry.card.numbers as unknown as Card;
-    if (!card.some((row) => row.includes(number))) {
+    const targets =
+      cardNumber != null ? held.filter((e) => e.cardNumber === cardNumber) : held;
+    const entry = targets.find((e) =>
+      (e.card.numbers as unknown as Card).some((row) => row.includes(number)),
+    );
+    if (!entry) {
       return { ok: false, reason: 'That number is not on your card.' };
     }
     if (number === FREE) return { ok: false, reason: 'That is the free space.' };
@@ -382,17 +447,52 @@ export class RoomService {
   }
 
   /**
+   * Mark several numbers at once.
+   *
+   * Used when a player switches from AUTO to MANUAL: everything AUTO had daubed is
+   * written down in one request, so the card carries on from exactly where it was
+   * instead of appearing to reset.
+   */
+  async markNumbers(
+    user: User,
+    numbers: number[],
+    cardNumber?: number,
+  ): Promise<RoomResult<{ marked: number }>> {
+    const round = await this.currentRound();
+    if (round.status !== 'PLAYING') return { ok: false, reason: 'The round is not running.' };
+
+    const held = await this.rounds.findEntries(round.id, user.id);
+    if (held.length === 0) return { ok: false, reason: 'You are not in this round.' };
+    this.touch(user.id);
+
+    const calls = await this.getCalls(round.id);
+    const wanted = new Set(numbers.filter((n) => n !== FREE && calls.includes(n)));
+    const targets = cardNumber != null ? held.filter((e) => e.cardNumber === cardNumber) : held;
+
+    let marked = 0;
+    for (const entry of targets) {
+      const onCard = new Set((entry.card.numbers as unknown as Card).flat());
+      const add = [...wanted].filter((n) => onCard.has(n) && !entry.marked.includes(n));
+      if (add.length === 0) continue;
+      await this.rounds.setMarks(entry.id, [...entry.marked, ...add]);
+      marked += add.length;
+    }
+    return { ok: true, marked };
+  }
+
+  /**
    * THE rule: the FIRST valid BINGO press wins. Serialized by a mutex, then finalized
    * by an atomic conditional update so only one winner is ever committed.
    */
-  async claimBingo(user: User): Promise<RoomResult<{ pattern: WinningPattern }>> {
+  async claimBingo(user: User): Promise<RoomResult<{ pattern: WinningPattern; cardNumber: number }>> {
     return this.mutex.runExclusive('room:bingo', async () => {
       const round = await this.currentRound();
       if (round.status !== 'PLAYING') {
         return { ok: false as const, reason: 'Not accepting BINGO right now.' };
       }
-      const entry = await this.rounds.findEntry(round.id, user.id);
-      if (!entry) return { ok: false as const, reason: 'You are not in this round.' };
+      const entries = await this.rounds.findEntries(round.id, user.id);
+      if (entries.length === 0) return { ok: false as const, reason: 'You are not in this round.' };
+      this.touch(user.id);
 
       const s = await this.settings.get();
       const key = `${round.id}:${user.id}`;
@@ -410,31 +510,40 @@ export class RoomService {
       }
 
       const calls = await this.getCalls(round.id);
-      const card = entry.card.numbers as unknown as Card;
       const enabled = s.patterns as WinningPattern[];
-      // AUTO-DAUB: the server decides the win from the called numbers alone. Tapping
-      // cells is purely a visual aid for the player and never affects the result.
-      const lines = this.validator.findLines(card, calls, calls, enabled);
+      const lastCalled = calls[calls.length - 1];
 
-      if (lines.length === 0) {
+      // AUTO-DAUB across EVERY card the player holds. One press covers all of them, so
+      // holding several cards never means having to guess which one to claim on.
+      let anyLine = false;
+      let winning: { pattern: WinningPattern; numbers: number[] } | undefined;
+      let entry = entries[0];
+
+      for (const e of entries) {
+        const lines = this.validator.findLines(
+          e.card.numbers as unknown as Card,
+          calls,
+          calls,
+          enabled,
+        );
+        if (lines.length > 0) anyLine = true;
+        // Real bingo rule: you must call on the ball that COMPLETES the line. If it was
+        // finished earlier and another ball has since been called, that line has passed.
+        const hit = lines.find((l) => l.numbers.includes(lastCalled));
+        if (hit) {
+          winning = hit;
+          entry = e;
+          break;
+        }
+      }
+
+      if (!winning) {
         if (s.falseBingoCooldownSec > 0) {
           this.cooldowns.set(key, now + s.falseBingoCooldownSec * 1000);
         }
         // Fire-and-forget: the player shouldn't wait on a stats write.
         void this.stats.recordFalseBingo(user.id).catch(() => {});
-        return { ok: false as const, reason: 'invalid' };
-      }
-
-      // Real bingo rule: you must call on the ball that COMPLETES your line. If the line
-      // was finished by an earlier ball and another has since been called, it has passed.
-      const lastCalled = calls[calls.length - 1];
-      const winning = lines.find((l) => l.numbers.includes(lastCalled));
-      if (!winning) {
-        if (s.falseBingoCooldownSec > 0) {
-          this.cooldowns.set(key, now + s.falseBingoCooldownSec * 1000);
-        }
-        void this.stats.recordFalseBingo(user.id).catch(() => {});
-        return { ok: false as const, reason: 'passed' };
+        return { ok: false as const, reason: anyLine ? 'passed' : 'invalid' };
       }
 
       const claimed = await this.rounds.claimWinner(
@@ -474,7 +583,7 @@ export class RoomService {
         { roundId: round.id, userId: user.id, card: entry.cardNumber, pattern: winning.pattern },
         'winner confirmed',
       );
-      return { ok: true as const, pattern: winning.pattern };
+      return { ok: true as const, pattern: winning.pattern, cardNumber: entry.cardNumber };
     });
   }
 
@@ -560,10 +669,17 @@ export class RoomService {
       round.status === 'SELECTING' ? Promise.resolve<number[]>([]) : this.getCalls(round.id),
     ]);
 
-    const mine = user ? entries.find((e) => e.userId === user.id) : undefined;
+    const mine = user ? entries.filter((e) => e.userId === user.id) : [];
     // Anyone polling while holding a card counts as "still here".
-    if (mine && user) this.presence.set(user.id, Date.now());
-    const winnerEntry = round.winnerId ? entries.find((e) => e.userId === round.winnerId) : undefined;
+    if (mine.length > 0 && user) this.touch(user.id);
+    const patterns = settings.patterns as WinningPattern[];
+    // Match the WINNING CARD, not just the winner. A player may hold several cards, and
+    // matching on userId alone would show their first card with a line that isn't on it.
+    const winnerEntry = round.winnerId
+      ? (entries.find(
+          (e) => e.userId === round.winnerId && e.cardNumber === round.winnerCardNo,
+        ) ?? entries.find((e) => e.userId === round.winnerId))
+      : undefined;
 
     const secondsLeft = round.selectionEndsAt
       ? Math.max(0, Math.ceil((round.selectionEndsAt.getTime() - Date.now()) / 1000))
@@ -585,22 +701,28 @@ export class RoomService {
       secondsLeft: round.status === 'SELECTING' ? secondsLeft : null,
       poolSize: config.CARD_POOL_SIZE,
       takenCards: entries.map((e) => e.cardNumber),
-      myCardNumber: mine?.cardNumber ?? null,
-      playersCount: entries.length,
+      myCards: mine.map((e) => ({
+        cardNumber: e.cardNumber,
+        card: e.card.numbers as unknown as Card,
+        marked: e.marked,
+        // True when THIS card completes a line on the ball just called, so the player
+        // can see which of their cards is the one to claim on.
+        hasBingo: this.validator
+          .findLines(e.card.numbers as unknown as Card, calls, calls, patterns)
+          .some((l) => l.numbers.includes(round.currentNumber ?? -1)),
+      })),
+      maxCards: Math.max(1, settings.maxCardsPerPlayer),
+      // Distinct people, not cards — one player with three cards is still one player.
+      playersCount: new Set(entries.map((e) => e.userId)).size,
+      cardsCount: entries.length,
       called: calls,
       currentNumber: round.currentNumber,
-      card: mine ? (mine.card.numbers as unknown as Card) : null,
-      marked: mine?.marked ?? [],
-      hasBingo: mine
-        ? this.validator
-            .findLines(
-              mine.card.numbers as unknown as Card,
-              calls,
-              calls,
-              settings.patterns as WinningPattern[],
-            )
-            .some((l) => l.numbers.includes(round.currentNumber ?? -1))
-        : false,
+      // True if ANY of the player's cards completes a line on the current ball.
+      hasBingo: mine.some((e) =>
+        this.validator
+          .findLines(e.card.numbers as unknown as Card, calls, calls, patterns)
+          .some((l) => l.numbers.includes(round.currentNumber ?? -1)),
+      ),
       registered: user?.registered ?? false,
       // `user` is already loaded by the auth layer — no extra query needed.
       coins: user ? user.coins : null,

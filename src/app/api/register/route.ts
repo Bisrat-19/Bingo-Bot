@@ -22,7 +22,7 @@ export async function POST(req: Request) {
     try {
       await bot.telegram.sendMessage(
         Number(updated.telegramId),
-        `✅ <b>Registration complete!</b>\n\nWelcome, ${updated.firstName ?? 'player'} — you start with <b>${updated.coins}</b> coins.\n\nTap <b>🎮 Play Game</b> to join the live Bingo room.`,
+        `✅ <b>Registration complete!</b>\n\nWelcome, ${updated.firstName ?? 'player'} — you start with <b>${updated.coins}</b> birr.\n\nTap <b>🎮 Play Game</b> to join the live Bingo room.`,
         { parse_mode: 'HTML', ...(kb ?? {}) },
       );
     } catch {

@@ -136,11 +136,11 @@ export function buildContainer(): AppContainer {
     const msg =
       action === 'approve'
         ? tx.type === 'DEPOSIT'
-          ? `✅ <b>Deposit approved</b>\n\n+<b>${amount}</b> coins added.\nNew balance: <b>${res.balance}</b>`
+          ? `✅ <b>Deposit approved</b>\n\n+<b>${amount}</b> birr added.\nNew balance: <b>${res.balance}</b>`
           : `✅ <b>Withdrawal sent</b>\n\n<b>${amount}</b> birr sent to <code>${tx.phone}</code>.\nBalance: <b>${res.balance}</b>`
         : tx.type === 'DEPOSIT'
           ? `❌ <b>Deposit rejected</b>\n\nRef <code>${tx.id.slice(-8)}</code>. Contact support if this is a mistake.`
-          : `❌ <b>Withdrawal rejected</b>\n\nYour <b>${tx.amount}</b> coins have been returned.\nBalance: <b>${res.balance}</b>`;
+          : `❌ <b>Withdrawal rejected</b>\n\nYour <b>${tx.amount}</b> birr has been returned.\nBalance: <b>${res.balance}</b>`;
 
     const target = await prisma.user.findUnique({ where: { id: tx.userId } });
     if (target) {

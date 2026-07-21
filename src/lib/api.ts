@@ -37,8 +37,11 @@ async function request<T>(
 export const api = {
   state: () => request<RoomState>('/room/state'),
   select: (cardNumber: number) => request<ActionResult>('/room/select', { cardNumber }),
-  deselect: () => request<ActionResult>('/room/deselect'),
-  mark: (number: number) => request<ActionResult>('/room/mark', { number }),
+  /** Release one card, or every card when no number is given. */
+  deselect: (cardNumber?: number) => request<ActionResult>('/room/deselect', { cardNumber }),
+  /** One number, or a whole list (used when AUTO hands over to MANUAL). */
+  mark: (number: number, cardNumber?: number, numbers?: number[]) =>
+    request<ActionResult>('/room/mark', numbers ? { numbers, cardNumber } : { number, cardNumber }),
   bingo: () => request<ActionResult>('/room/bingo'),
 
   // Admin-only (server enforces membership via ADMIN_TELEGRAM_IDS).

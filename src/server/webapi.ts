@@ -22,6 +22,8 @@ export interface ApiBody {
   initData?: string;
   cardNumber?: number;
   number?: number;
+  /** Bulk mark (AUTO -> MANUAL carry-over). */
+  numbers?: number[];
   devUser?: string;
   devUsername?: string;
   devFirst?: string;

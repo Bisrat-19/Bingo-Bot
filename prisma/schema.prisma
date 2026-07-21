@@ -26,7 +26,9 @@ model Settings {
   winnerDisplaySeconds  Int      @default(8) // how long the winner splash shows
   minPlayers            Int      @default(1) // players required to start a round
   startingCoins         Int      @default(30) // coins a new player receives
-  entryFee              Int      @default(10) // coins charged to take a card
+  entryFee              Int      @default(10) // birr charged per card
+  /// How many cards one player may hold in a single round.
+  maxCardsPerPlayer     Int      @default(2)
   falseBingoCooldownSec Int      @default(0) // 0 = no cooldown, just an error message
   /// Which patterns count as a win: HORIZONTAL, VERTICAL, DIAGONAL, FOUR_CORNERS, FULL_HOUSE
   patterns              String[] @default(["HORIZONTAL", "VERTICAL", "DIAGONAL"])
@@ -36,6 +38,11 @@ model Settings {
   minWithdrawal         Int      @default(10)
   /// Telebirr number shown to users on the deposit screen.
   depositPhone          String   @default("0936093033")
+  /// Support contacts shown by the Support button, as [{ label, handle }].
+  /// Admins add, edit and remove entries at runtime.
+  supportItems          Json     @default("[]")
+  /// The Instructions text. Empty means "use the built-in default".
+  instructionsText      String   @default("")
   updatedAt             DateTime @updatedAt
 
   @@map("settings")
@@ -114,8 +121,10 @@ model Entry {
   createdAt  DateTime @default(now())
 
   @@unique([roundId, cardNumber]) // one card can be held by only ONE player per round
-  @@unique([roundId, userId]) // and each player holds only ONE card per round
+  // A player may hold SEVERAL cards, capped by Settings.maxCardsPerPlayer, so there is
+  // deliberately no unique constraint on (roundId, userId).
   @@index([roundId])
+  @@index([roundId, userId])
   @@map("entries")
 }
 
@@ -212,6 +221,7 @@ enum LedgerReason {
   ROUND_REFUND
   ADMIN_ADJUST
   BONUS
+  SIGNUP_BONUS
 }
 
 /// Immutable audit trail: every coin movement, with the resulting balance.

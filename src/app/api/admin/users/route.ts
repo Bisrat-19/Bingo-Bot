@@ -37,6 +37,8 @@ export async function POST(req: Request) {
         firstName: true,
         coins: true,
         blocked: true,
+        registered: true,
+        phone: true,
         createdAt: true,
         statistics: {
           select: { gamesPlayed: true, gamesWon: true, bingosCalled: true, falseBingos: true },

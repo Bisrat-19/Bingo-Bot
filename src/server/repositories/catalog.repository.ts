@@ -24,6 +24,11 @@ export class CatalogRepository {
     return this.prisma.bingoCard.findUnique({ where: { number } });
   }
 
+  /** Every card, ordered. Read once at runtime and cached by the caller. */
+  all(): Promise<BingoCard[]> {
+    return this.prisma.bingoCard.findMany({ orderBy: { number: 'asc' } });
+  }
+
   listNumbers(): Promise<{ number: number }[]> {
     return this.prisma.bingoCard.findMany({ select: { number: true }, orderBy: { number: 'asc' } });
   }

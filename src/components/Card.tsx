@@ -5,7 +5,8 @@ interface Props {
   card: number[][] | null;
   marked: number[];
   called: number[];
-  onMark: (n: number) => void;
+  /** Omitted in AUTO mode, where the cells are display-only. */
+  onMark?: (n: number) => void;
   active: boolean; // game is PLAYING
 }
 
@@ -48,8 +49,8 @@ function CardImpl({ card, marked, called, onMark, active }: Props) {
                 <button
                   key={`${r}-${c}`}
                   className={cls}
-                  disabled={!active || isMarked}
-                  onPointerDown={() => onMark(n)}
+                  disabled={!active || isMarked || !onMark}
+                  onPointerDown={() => onMark?.(n)}
                   onClick={(e) => e.preventDefault()}
                 >
                   {n}

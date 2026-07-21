@@ -12,7 +12,7 @@ interface Props {
  */
 export function ActionBar({ state, claiming, onBingo }: Props) {
   const playing = state.phase === 'PLAYING';
-  const joined = state.myCardNumber != null;
+  const joined = state.myCards.length > 0;
 
   return (
     <div className="bottombar">
@@ -22,7 +22,10 @@ export function ActionBar({ state, claiming, onBingo }: Props) {
       </div>
       <div className="stat">
         <div className="label">Bid</div>
-        <div className="value">{state.entryFee}</div>
+        <div className="value">
+          {state.entryFee}
+          {state.myCards.length > 1 && <span className="mult">×{state.myCards.length}</span>}
+        </div>
       </div>
       <div className="stat">
         <div className="label">Players</div>
