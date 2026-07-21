@@ -28,6 +28,8 @@ export default function Page() {
   const [pendingCard, setPendingCard] = useState<number | null>(null);
   /** Cells tapped locally, shown instantly while the request is in flight. */
   const [localMarks, setLocalMarks] = useState<Set<number>>(new Set());
+  /** Flips the BINGO button the moment it's pressed, before the server answers. */
+  const [claiming, setClaiming] = useState(false);
 
   const prevCalled = useRef<Set<number>>(new Set());
   const first = useRef(true);
@@ -73,7 +75,7 @@ export default function Page() {
     const sig = [
       s.roundId, s.phase, s.secondsLeft, s.currentNumber, s.called.length,
       s.takenCards.length, s.myCardNumber, s.marked.length, s.playersCount,
-      s.coins, s.pot, s.nextRoundInSec, s.winner?.cardNumber ?? '',
+      s.coins, s.pot, s.winAmount, s.entryFee, s.nextRoundInSec, s.winner?.cardNumber ?? '',
     ].join('|');
     if (sig === sigRef.current) return;
     sigRef.current = sig;
@@ -145,9 +147,11 @@ export default function Page() {
     // wins", every millisecond counts. The ref de-dupes without disabling the button.
     if (inflight.current) return;
     inflight.current = true;
+    setClaiming(true); // paint immediately — no waiting on the network
     haptic('light');
     const res = await api.bingo();
     inflight.current = false;
+    setClaiming(false);
     if (isErr(res)) showToast('Network error');
     else if (res.ok) {
       haptic('success');
@@ -205,7 +209,6 @@ export default function Page() {
             mine={pendingCard ?? state.myCardNumber}
             secondsLeft={state.secondsLeft}
             playersCount={state.playersCount}
-            myCard={state.card}
             busy={busy}
             onSelect={onSelect}
             onDeselect={onDeselect}
@@ -244,13 +247,14 @@ export default function Page() {
         )}
       </div>
 
-      <ActionBar state={state} busy={busy} onBingo={onBingo} />
+      <ActionBar state={state} claiming={claiming} onBingo={onBingo} />
 
       {toast && <div className="toast">{toast}</div>}
       {state.phase === 'FINISHED' && state.winner && (
         <WinnerOverlay
           name={state.winner.name}
           cardNumber={state.winner.cardNumber}
+          prize={state.winner.prize}
           pattern={state.winner.pattern}
           line={state.winner.line}
           card={state.winner.card}

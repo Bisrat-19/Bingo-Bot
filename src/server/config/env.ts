@@ -34,6 +34,14 @@ const schema = z.object({
     .optional()
     .transform((v) => (v && v.trim() ? v.trim() : undefined)),
 
+  /// Optional dedicated chat/group for admin review messages. When set, approve/reject
+  /// notifications go ONLY here instead of into each admin's private chat — so an admin
+  /// who is also a player never sees admin controls in their own conversation.
+  ADMIN_CHAT_ID: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() ? v.trim() : undefined)),
+
   /// Comma-separated Telegram user IDs allowed to open the admin panel.
   ADMIN_TELEGRAM_IDS: z
     .string()

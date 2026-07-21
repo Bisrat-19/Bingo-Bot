@@ -19,10 +19,12 @@ export interface RoomState {
   coins: number | null;
   entryFee: number;
   pot: number;
+  winAmount: number;
   isAdmin: boolean;
   winner: {
     name: string;
     cardNumber: number;
+    prize: number;
     pattern: string | null;
     /** Numbers forming the winning line — highlighted on the winner's card. */
     line: number[];

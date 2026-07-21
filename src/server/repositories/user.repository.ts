@@ -27,10 +27,10 @@ export class UserRepository {
   }
 
   /** Mark a player registered (idempotent — re-registering keeps the original date). */
-  markRegistered(userId: string): Promise<User> {
+  markRegistered(userId: string, phone?: string): Promise<User> {
     return this.prisma.user.update({
       where: { id: userId },
-      data: { registered: true, registeredAt: new Date() },
+      data: { registered: true, registeredAt: new Date(), ...(phone ? { phone } : {}) },
     });
   }
 

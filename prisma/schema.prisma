@@ -30,6 +30,12 @@ model Settings {
   falseBingoCooldownSec Int      @default(0) // 0 = no cooldown, just an error message
   /// Which patterns count as a win: HORIZONTAL, VERTICAL, DIAGONAL, FOUR_CORNERS, FULL_HOUSE
   patterns              String[] @default(["HORIZONTAL", "VERTICAL", "DIAGONAL"])
+  /// House cut in percent (1-100). The winner receives (100 - houseCutPercent)% of the pot.
+  houseCutPercent       Int      @default(20)
+  minDeposit            Int      @default(10)
+  minWithdrawal         Int      @default(10)
+  /// Telebirr number shown to users on the deposit screen.
+  depositPhone          String   @default("0936093033")
   updatedAt             DateTime @updatedAt
 
   @@map("settings")
@@ -41,6 +47,8 @@ model User {
   username   String?
   firstName  String?
   coins      Int      @default(30)
+  /// Collected at registration (shared via Telegram or typed).
+  phone      String?
   /// Blocked players can't join rounds (admin control).
   blocked    Boolean  @default(false)
   /// Explicit registration: a row can exist before the player registers, so the bot
@@ -49,9 +57,11 @@ model User {
   registeredAt DateTime?
   createdAt    DateTime  @default(now())
 
-  entries    Entry[]
-  wins       Winner[]
-  statistics Statistics?
+  entries      Entry[]
+  wins         Winner[]
+  statistics   Statistics?
+  transactions Transaction[]
+  ledger       LedgerEntry[]
 
   @@map("users")
 }
@@ -148,4 +158,92 @@ model Statistics {
   updatedAt    DateTime @updatedAt
 
   @@map("statistics")
+}
+
+
+enum TxType {
+  DEPOSIT
+  WITHDRAWAL
+}
+
+enum TxStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// A deposit or withdrawal request awaiting admin review.
+model Transaction {
+  id     String   @id @default(cuid())
+  userId String
+  user   User     @relation(fields: [userId], references: [id])
+  type   TxType
+  status TxStatus @default(PENDING)
+
+  /// Amount the player declared (coins == birr, 1:1).
+  amount         Int
+  /// What the admin actually approved — may differ from the declared amount.
+  approvedAmount Int?
+
+  fullName String
+  phone    String
+  /// Telegram file_id of the receipt photo (deposits only).
+  receiptFileId String?
+
+  /// The receipt image itself, stored by us (see ReceiptFile).
+  receipt ReceiptFile?
+
+  adminNote  String?
+  reviewedBy String? // admin telegram id
+  reviewedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("transactions")
+}
+
+enum LedgerReason {
+  DEPOSIT
+  WITHDRAWAL_HOLD
+  WITHDRAWAL_REFUND
+  ENTRY_FEE
+  PRIZE
+  ROUND_REFUND
+  ADMIN_ADJUST
+  BONUS
+}
+
+/// Immutable audit trail: every coin movement, with the resulting balance.
+model LedgerEntry {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id])
+  delta        Int // positive = credit, negative = debit
+  balanceAfter Int
+  reason       LedgerReason
+  /// transaction id / round id that caused this movement
+  refId        String?
+  createdAt    DateTime     @default(now())
+
+  @@index([userId, createdAt])
+  @@map("ledger_entries")
+}
+
+
+/// The deposit receipt image, stored in our own database.
+///
+/// Telegram file_ids are tied to the bot token and their download links expire, so for
+/// financial evidence we keep our own copy. Held in a separate table so listing
+/// transactions never drags the blobs along.
+model ReceiptFile {
+  id        String      @id @default(cuid())
+  txId      String      @unique
+  tx        Transaction @relation(fields: [txId], references: [id], onDelete: Cascade)
+  mimeType  String      @default("image/jpeg")
+  sizeBytes Int
+  data      Bytes
+  createdAt DateTime    @default(now())
+
+  @@map("receipt_files")
 }

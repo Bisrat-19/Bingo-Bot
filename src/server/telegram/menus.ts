@@ -12,6 +12,7 @@ export const BTN = {
   balance: '💳 Balance',
   support: '📞 Support',
   instructions: '📖 Instructions',
+  admin: '⚙️ Admin',
 } as const;
 
 /**
@@ -35,6 +36,14 @@ export function playUrl(userId: string, telegramId: bigint): string | undefined 
   return `${config.WEBAPP_URL}?tk=${encodeURIComponent(token)}`;
 }
 
+/** Asks for the phone number — Telegram can share it with a single tap. */
+export function phoneKeyboard() {
+  return Markup.keyboard([
+    [Markup.button.contactRequest('📱 Share my phone number')],
+    ['❌ Cancel'],
+  ]).resize();
+}
+
 /** Shown to brand-new users: registration happens in the bot, so this is plain text. */
 export function registerKeyboard() {
   return Markup.keyboard([[BTN.register]]).resize();
@@ -44,10 +53,13 @@ export function registerKeyboard() {
 export function mainMenuKeyboard(userId: string, telegramId: bigint) {
   const url = playUrl(userId, telegramId);
   const playRow = url ? [Markup.button.webApp(BTN.play, url)] : [BTN.play];
-  return Markup.keyboard([
+  const rows: (string | ReturnType<typeof Markup.button.webApp>)[][] = [
     playRow,
     [BTN.deposit, BTN.withdraw],
     [BTN.balance],
     [BTN.support, BTN.instructions],
-  ]).resize();
+  ];
+  // Admins get an extra row — everyone else never sees it.
+  if (config.ADMIN_TELEGRAM_IDS.includes(String(telegramId))) rows.push([BTN.admin]);
+  return Markup.keyboard(rows).resize();
 }

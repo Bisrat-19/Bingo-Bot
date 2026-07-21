@@ -10,6 +10,12 @@ export interface EditableSettings {
   falseBingoCooldownSec: number;
   /** Which patterns count as a win. */
   patterns: string[];
+  /** House cut % (1-100). Winner receives (100 - houseCutPercent)% of the pot. */
+  houseCutPercent: number;
+  minDeposit: number;
+  minWithdrawal: number;
+  /** Telebirr number shown on the deposit screen. */
+  depositPhone: string;
 }
 
 export const VALID_PATTERNS = [
@@ -30,6 +36,10 @@ const LIMITS: Record<keyof EditableSettings, [number, number]> = {
   entryFee: [0, 1_000_000],
   falseBingoCooldownSec: [0, 300],
   patterns: [0, 0], // handled separately (not numeric)
+  depositPhone: [0, 0], // handled separately (not numeric)
+  houseCutPercent: [1, 100],
+  minDeposit: [1, 1_000_000],
+  minWithdrawal: [1, 1_000_000],
 };
 
 /**
@@ -58,12 +68,12 @@ export class SettingsService {
 
   /** Apply a partial update, clamped to safe bounds. Returns the new settings. */
   async update(patch: Partial<EditableSettings>): Promise<Settings> {
-    const data: Record<string, number | string[]> = {};
+    const data: Record<string, number | string | string[]> = {};
     for (const [key, [min, max]] of Object.entries(LIMITS) as [
       keyof EditableSettings,
       [number, number],
     ][]) {
-      if (key === 'patterns') continue; // not numeric
+      if (key === 'patterns' || key === 'depositPhone') continue; // not numeric
       const value = patch[key];
       if (value === undefined || value === null) continue;
       const n = Math.round(Number(value));
@@ -77,6 +87,10 @@ export class SettingsService {
         (VALID_PATTERNS as readonly string[]).includes(p),
       );
       if (cleaned.length > 0) data.patterns = cleaned;
+    }
+
+    if (typeof patch.depositPhone === 'string' && patch.depositPhone.trim()) {
+      data.depositPhone = patch.depositPhone.trim().slice(0, 32);
     }
     const row = await this.prisma.settings.upsert({
       where: { id: 1 },

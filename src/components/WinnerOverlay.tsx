@@ -3,6 +3,7 @@ import { LETTERS } from '@/lib/bingo';
 interface Props {
   name: string;
   cardNumber: number;
+  prize: number;
   pattern: string | null;
   line: number[];
   card: number[][] | null;
@@ -17,7 +18,7 @@ const PATTERN_LABEL: Record<string, string> = {
 
 // Shown for a few seconds after a win: the winner, their card number, and their card
 // with the winning line highlighted.
-export function WinnerOverlay({ name, cardNumber, pattern, line, card, nextIn }: Props) {
+export function WinnerOverlay({ name, cardNumber, prize, pattern, line, card, nextIn }: Props) {
   const lineSet = new Set(line);
 
   return (
@@ -26,6 +27,7 @@ export function WinnerOverlay({ name, cardNumber, pattern, line, card, nextIn }:
         <div className="confetti">🎉</div>
         <h1>BINGO!</h1>
         <p className="winner-name">{name}</p>
+        <div className="winner-prize">+{prize} birr</div>
         <div className="winner-cardno">
           Card #{cardNumber}
           {pattern && <> · {PATTERN_LABEL[pattern] ?? pattern}</>}

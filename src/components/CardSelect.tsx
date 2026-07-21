@@ -1,5 +1,4 @@
 import { memo } from 'react';
-import { Card } from './Card';
 
 interface Props {
   poolSize: number;
@@ -7,7 +6,6 @@ interface Props {
   mine: number | null;
   secondsLeft: number | null;
   playersCount: number;
-  myCard: number[][] | null;
   busy: boolean;
   onSelect: (n: number) => void;
   onDeselect: () => void;
@@ -23,7 +21,6 @@ function CardSelectImpl({
   mine,
   secondsLeft,
   playersCount,
-  myCard,
   busy,
   onSelect,
   onDeselect,
@@ -72,12 +69,6 @@ function CardSelectImpl({
         })}
       </div>
 
-      {mine != null && myCard && (
-        <div className="my-pick">
-          <div className="my-pick-label">Your card · #{mine} — tap it again to release</div>
-          <Card card={myCard} marked={[]} called={[]} onMark={() => {}} active={false} />
-        </div>
-      )}
     </div>
   );
 }
@@ -89,6 +80,5 @@ export const CardSelect = memo(
     a.onDeselect === b.onDeselect &&
     a.secondsLeft === b.secondsLeft &&
     a.playersCount === b.playersCount &&
-    a.taken.length === b.taken.length &&
-    a.myCard === b.myCard,
+    a.taken.length === b.taken.length,
 );

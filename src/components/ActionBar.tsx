@@ -2,42 +2,44 @@ import type { RoomState } from '@/lib/types';
 
 interface Props {
   state: RoomState;
-  busy: boolean;
+  claiming: boolean;
   onBingo: () => void;
 }
 
-// Casino-style control bar: stat tiles + the BINGO button while a round is running.
-export function ActionBar({ state, busy, onBingo }: Props) {
+/**
+ * Casino-style control bar. BID / BALANCE / PLAYERS / WIN all update live — PLAYERS and
+ * WIN grow in real time as people take cards during selection.
+ */
+export function ActionBar({ state, claiming, onBingo }: Props) {
   const playing = state.phase === 'PLAYING';
   const joined = state.myCardNumber != null;
 
   return (
     <div className="bottombar">
       <div className="stat">
-        <div className="label">Called</div>
-        <div className="value">{state.called.length}/75</div>
+        <div className="label">Balance</div>
+        <div className="value coins">{state.coins ?? 0}</div>
+      </div>
+      <div className="stat">
+        <div className="label">Bid</div>
+        <div className="value">{state.entryFee}</div>
       </div>
       <div className="stat">
         <div className="label">Players</div>
         <div className="value">{state.playersCount}</div>
       </div>
       <div className="stat">
-        <div className="label">Coins</div>
-        <div className="value coins">{state.coins ?? 0}</div>
-      </div>
-      <div className="stat">
-        <div className="label">Pot</div>
-        <div className="value">{state.pot}</div>
+        <div className="label">Win</div>
+        <div className="value win">{state.winAmount}</div>
       </div>
       {playing && joined ? (
-        // Never disabled — duplicate presses are de-duped in the handler so the button
-        // always feels instant.
+        // Never disabled; `claiming` only swaps the label so the press feels instant.
         <button
-          className="act-btn bingo"
+          className={'act-btn bingo' + (claiming ? ' claiming' : '')}
           onPointerDown={onBingo}
           onClick={(e) => e.preventDefault()}
         >
-          Bingo
+          {claiming ? '···' : 'Bingo'}
         </button>
       ) : (
         <button className="act-btn" disabled>

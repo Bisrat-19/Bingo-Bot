@@ -13,6 +13,7 @@ import { FREE, WinningPattern, type Card, type TgUser } from '../types/index';
 import { displayName } from '../utils/format';
 import type { KeyedMutex } from '../utils/Mutex';
 import type { SettingsService } from './SettingsService';
+import type { WalletService } from './WalletService';
 import type { StatisticsService } from './StatisticsService';
 
 
@@ -41,10 +42,14 @@ export interface RoomState {
   coins: number | null;
   entryFee: number;
   pot: number;
+  /** What the winner of THIS round will receive (pot minus house cut, floored). */
+  winAmount: number;
   isAdmin: boolean;
   winner: {
     name: string;
     cardNumber: number;
+    /** Birr actually won (pot minus house cut, floored). */
+    prize: number;
     pattern: string | null;
     /** Numbers forming the winning line, so the UI can highlight the pattern. */
     line: number[];
@@ -67,6 +72,14 @@ export type RoomResult<T = object> = ({ ok: true } & T) | { ok: false; reason: s
 export class RoomService {
   private cooldowns = new Map<string, number>();
   private drawing = false;
+  /** Called numbers per round, kept in memory so a BINGO press needs no query for them. */
+  private callsCache = new Map<string, number[]>();
+  /** userId -> last time we saw them poll. Lets us detect that everyone has left. */
+  private presence = new Map<string, number>();
+  /** If nobody in the round has polled for this long, treat the round as abandoned. */
+  private static readonly ABANDON_MS = 30_000;
+  /** Very short-lived round cache; correctness never depends on it (see claimWinner). */
+  private roundCache: { round: Awaited<ReturnType<RoundRepository['create']>>; at: number } | null = null;
   /// Guards the "did this round already get scheduled/started" transitions.
   private starting = false;
 
@@ -82,6 +95,7 @@ export class RoomService {
     private readonly timers: TimerService,
     private readonly mutex: KeyedMutex,
     private readonly settings: SettingsService,
+    private readonly wallet: WalletService,
     private readonly logger: Logger,
   ) {}
 
@@ -91,9 +105,9 @@ export class RoomService {
   }
 
   /** Explicit registration from the Mini App (identity comes from verified initData). */
-  async register(user: User): Promise<User> {
+  async register(user: User, phone?: string): Promise<User> {
     if (user.registered) return user; // idempotent
-    const updated = await this.users.markRegistered(user.id);
+    const updated = await this.users.markRegistered(user.id, phone);
     this.logger.info({ userId: user.id, telegramId: String(user.telegramId) }, 'player registered');
     return updated;
   }
@@ -135,14 +149,32 @@ export class RoomService {
     if (abandoned) this.logger.info({ abandoned }, 'closed interrupted rounds on boot');
     this.timers.clearAll(T_DRAW);
     this.timers.clearAll(T_PHASE);
+    this.callsCache.clear();
+    this.invalidateRound();
     await this.rounds.create();
     this.logger.info('Bingo room open — waiting for the first card selection');
   }
 
   private async currentRound() {
-    const round = await this.rounds.current();
-    if (round) return round;
-    return this.rounds.create();
+    // 400ms cache: removes a query from every poll and every button press. Safe because
+    // every state-changing operation is validated against the DB, not this snapshot.
+    if (this.roundCache && Date.now() - this.roundCache.at < 400) return this.roundCache.round;
+    const round = (await this.rounds.current()) ?? (await this.rounds.create());
+    this.roundCache = { round, at: Date.now() };
+    return round;
+  }
+
+  private invalidateRound(): void {
+    this.roundCache = null;
+  }
+
+  /** Called numbers, served from memory after the first read. */
+  private async getCalls(roundId: string): Promise<number[]> {
+    const hit = this.callsCache.get(roundId);
+    if (hit) return hit;
+    const calls = await this.rounds.listCalls(roundId);
+    this.callsCache.set(roundId, calls);
+    return calls;
   }
 
   // ---- Selection -------------------------------------------------------------
@@ -187,8 +219,8 @@ export class RoomService {
         }
       } else {
         // New entry: charge the entry fee first (atomic, can't overdraw).
-        const paid = await this.users.chargeCoins(user.id, s.entryFee);
-        if (!paid) {
+        const paid = await this.wallet.debit(user.id, s.entryFee, 'ENTRY_FEE', round.id);
+        if (paid === null) {
           return {
             ok: false as const,
             reason: `Not enough coins — you need ${s.entryFee} to play.`,
@@ -200,8 +232,9 @@ export class RoomService {
             pot: { increment: s.entryFee },
             entryFee: s.entryFee,
           });
+          this.invalidateRound();
         } catch {
-          await this.users.addCoins(user.id, s.entryFee); // refund on failure
+          await this.wallet.credit(user.id, s.entryFee, 'ROUND_REFUND', round.id); // refund
           return { ok: false as const, reason: `Card ${cardNumber} was just taken.` };
         }
       }
@@ -210,6 +243,7 @@ export class RoomService {
       if (wasEmpty) {
         const endsAt = new Date(Date.now() + s.selectionSeconds * 1000);
         await this.rounds.update(round.id, { selectionEndsAt: endsAt });
+      this.invalidateRound();
         this.scheduleStart(round.id, s.selectionSeconds * 1000);
         this.logger.info({ roundId: round.id }, 'selection window opened');
       }
@@ -233,14 +267,16 @@ export class RoomService {
 
       await this.rounds.deleteEntry(mine.id);
       if (round.entryFee > 0) {
-        await this.users.addCoins(user.id, round.entryFee);
+        await this.wallet.credit(user.id, round.entryFee, 'ROUND_REFUND', round.id);
         await this.rounds.update(round.id, { pot: { decrement: round.entryFee } });
+        this.invalidateRound();
       }
 
       const remaining = await this.rounds.countEntries(round.id);
       if (remaining === 0) {
         this.timers.clearTimeout(T_PHASE);
         await this.rounds.update(round.id, { selectionEndsAt: null });
+      this.invalidateRound();
         this.logger.info({ roundId: round.id }, 'countdown cancelled — no players left');
       }
       return { ok: true as const };
@@ -265,6 +301,7 @@ export class RoomService {
       if (entries.length < s.minPlayers) {
         // Not enough players — reopen selection and wait for more.
         await this.rounds.update(roundId, { selectionEndsAt: null });
+      this.invalidateRound();
         this.logger.info(
           { roundId, have: entries.length, need: s.minPlayers },
           'not enough players — waiting again',
@@ -273,6 +310,7 @@ export class RoomService {
       }
 
       await this.rounds.update(roundId, { status: 'PLAYING', startedAt: new Date() });
+      this.invalidateRound();
       await this.stats.recordGamePlayed(entries.map((e) => e.userId));
       this.logger.info({ roundId, players: entries.length }, 'round started');
 
@@ -292,7 +330,17 @@ export class RoomService {
         this.timers.clearAll(T_DRAW);
         return;
       }
-      const called = await this.rounds.listCalls(roundId);
+      // If every player has closed the app, don't keep drawing to an empty room.
+      const players = await this.rounds.listEntries(roundId);
+      const cutoff = Date.now() - RoomService.ABANDON_MS;
+      const anyoneHere = players.some((p) => (this.presence.get(p.userId) ?? 0) > cutoff);
+      if (players.length === 0 || !anyoneHere) {
+        this.logger.info({ roundId, players: players.length }, 'all players left — resetting room');
+        await this.resetRoom('all players left');
+        return;
+      }
+
+      const called = await this.getCalls(roundId);
       const next = this.caller.drawNext(called);
       if (next === null) {
         await this.finishRound(roundId); // all 75 drawn, nobody won
@@ -300,6 +348,8 @@ export class RoomService {
       }
       await this.rounds.addCall(roundId, next, called.length + 1);
       await this.rounds.update(roundId, { currentNumber: next });
+      this.callsCache.set(roundId, [...called, next]);
+      this.invalidateRound();
     } catch (err) {
       this.logger.error({ err, roundId }, 'drawTick failed');
     } finally {
@@ -322,7 +372,7 @@ export class RoomService {
     if (number === FREE) return { ok: false, reason: 'That is the free space.' };
     if (entry.marked.includes(number)) return { ok: true, number }; // idempotent
 
-    const calls = await this.rounds.listCalls(round.id);
+    const calls = await this.getCalls(round.id);
     if (!calls.includes(number)) return { ok: false, reason: `${number} not called yet.` };
 
     // Cosmetic only: recording which cells the player tapped. The win is computed
@@ -359,7 +409,7 @@ export class RoomService {
         }
       }
 
-      const calls = await this.rounds.listCalls(round.id);
+      const calls = await this.getCalls(round.id);
       const card = entry.card.numbers as unknown as Card;
       const enabled = s.patterns as WinningPattern[];
       // AUTO-DAUB: the server decides the win from the called numbers alone. Tapping
@@ -370,7 +420,8 @@ export class RoomService {
         if (s.falseBingoCooldownSec > 0) {
           this.cooldowns.set(key, now + s.falseBingoCooldownSec * 1000);
         }
-        await this.stats.recordFalseBingo(user.id);
+        // Fire-and-forget: the player shouldn't wait on a stats write.
+        void this.stats.recordFalseBingo(user.id).catch(() => {});
         return { ok: false as const, reason: 'invalid' };
       }
 
@@ -382,7 +433,7 @@ export class RoomService {
         if (s.falseBingoCooldownSec > 0) {
           this.cooldowns.set(key, now + s.falseBingoCooldownSec * 1000);
         }
-        await this.stats.recordFalseBingo(user.id);
+        void this.stats.recordFalseBingo(user.id).catch(() => {});
         return { ok: false as const, reason: 'passed' };
       }
 
@@ -394,6 +445,7 @@ export class RoomService {
         winning.numbers,
       );
       if (!claimed) return { ok: false as const, reason: 'Someone already won this round!' };
+      this.invalidateRound();
 
       this.timers.clearAll(T_DRAW);
       await this.winners.create({
@@ -407,10 +459,14 @@ export class RoomService {
       await this.rounds.setHasBingo(entry.id, true);
       await this.stats.recordBingoCalled(user.id);
       await this.stats.recordWin(user.id);
-      // Winner takes the pot.
-      if (round.pot > 0) {
-        await this.users.addCoins(user.id, round.pot);
-        this.logger.info({ userId: user.id, pot: round.pot }, 'pot awarded to winner');
+      // Winner takes the pot minus the house cut, rounded DOWN to whole coins.
+      const prize = Math.floor((round.pot * (100 - s.houseCutPercent)) / 100);
+      if (prize > 0) {
+        await this.wallet.credit(user.id, prize, 'PRIZE', round.id);
+        this.logger.info(
+          { userId: user.id, pot: round.pot, cut: s.houseCutPercent, prize },
+          'prize awarded to winner',
+        );
       }
 
       await this.scheduleNextRound();
@@ -422,15 +478,55 @@ export class RoomService {
     });
   }
 
+  /**
+   * Stop the current round immediately, refund every stake, and open a fresh selection
+   * round. Used when everyone leaves and by the admin "Close game" button.
+   */
+  async resetRoom(reason: string): Promise<{ refunded: number }> {
+    this.timers.clearAll(T_DRAW);
+    this.timers.clearAll(T_PHASE);
+
+    // Read the round FRESH — a refund must never be based on the cached snapshot.
+    this.invalidateRound();
+    const round = (await this.rounds.current()) ?? (await this.rounds.create());
+    const entries = await this.rounds.listEntries(round.id);
+
+    if (round.entryFee > 0) {
+      for (const e of entries) {
+        await this.wallet.credit(e.userId, round.entryFee, 'ROUND_REFUND', round.id);
+      }
+    }
+    await this.rounds.update(round.id, {
+      status: 'FINISHED',
+      endedAt: new Date(),
+      selectionEndsAt: null,
+    });
+
+    this.presence.clear();
+    this.callsCache.clear();
+    this.invalidateRound();
+    const fresh = await this.rounds.create();
+    this.invalidateRound();
+
+    this.logger.info(
+      { reason, refunded: entries.length, newRound: fresh.id },
+      'room reset — new round open',
+    );
+    return { refunded: entries.length };
+  }
+
   /** End the round with no winner (all balls drawn) — everyone gets their fee back. */
   private async finishRound(roundId: string): Promise<void> {
     this.timers.clearAll(T_DRAW);
     const round = await this.rounds.findById(roundId);
     await this.rounds.update(roundId, { status: 'FINISHED', endedAt: new Date() });
+    this.invalidateRound();
 
     if (round && round.entryFee > 0) {
       const entries = await this.rounds.listEntries(roundId);
-      for (const e of entries) await this.users.addCoins(e.userId, round.entryFee);
+      for (const e of entries) {
+        await this.wallet.credit(e.userId, round.entryFee, 'ROUND_REFUND', roundId);
+      }
       this.logger.info({ roundId, refunded: entries.length }, 'no winner — entry fees refunded');
     }
     this.logger.info({ roundId }, 'round ended with no winner');
@@ -444,8 +540,10 @@ export class RoomService {
       () => {
         void (async () => {
           this.timers.clearAll(T_DRAW);
-          await this.rounds.create();
-          this.logger.info('new round open for card selection');
+          const fresh = await this.rounds.create();
+          this.callsCache.clear();
+          this.invalidateRound();
+          this.logger.info({ roundId: fresh.id }, 'new round open for card selection');
         })().catch((err) => this.logger.error({ err }, 'failed to open next round'));
       },
       s.winnerDisplaySeconds * 1000,
@@ -459,10 +557,12 @@ export class RoomService {
     const settings = await this.settings.get();
     const [entries, calls] = await Promise.all([
       this.rounds.listEntries(round.id),
-      round.status === 'SELECTING' ? Promise.resolve<number[]>([]) : this.rounds.listCalls(round.id),
+      round.status === 'SELECTING' ? Promise.resolve<number[]>([]) : this.getCalls(round.id),
     ]);
 
     const mine = user ? entries.find((e) => e.userId === user.id) : undefined;
+    // Anyone polling while holding a card counts as "still here".
+    if (mine && user) this.presence.set(user.id, Date.now());
     const winnerEntry = round.winnerId ? entries.find((e) => e.userId === round.winnerId) : undefined;
 
     const secondsLeft = round.selectionEndsAt
@@ -506,11 +606,13 @@ export class RoomService {
       coins: user ? user.coins : null,
       entryFee: settings.entryFee,
       pot: round.pot,
+      winAmount: Math.floor((round.pot * (100 - settings.houseCutPercent)) / 100),
       isAdmin: this.isAdmin(user),
       winner: winnerEntry
         ? {
             name: displayName(winnerEntry.user),
             cardNumber: winnerEntry.cardNumber,
+            prize: Math.floor((round.pot * (100 - settings.houseCutPercent)) / 100),
             pattern: round.winnerPattern,
             line: round.winnerLine,
             card: winnerEntry.card.numbers as unknown as Card,
