@@ -6,16 +6,18 @@
  * point; withdrawals only hold coins at the final step).
  */
 
-export type Flow = 'deposit' | 'withdraw' | 'register' | 'config';
+export type Flow = 'deposit' | 'withdraw' | 'register' | 'config' | 'reject';
 
 export interface WizardState {
   flow: Flow;
-  step: 'name' | 'phone' | 'amount' | 'receipt' | 'value';
+  step: 'name' | 'phone' | 'amount' | 'receipt' | 'value' | 'method' | 'sms';
   /** For the admin config flow: which setting is being edited. */
   configKey?: string;
   fullName?: string;
   phone?: string;
   amount?: number;
+  /** Deposit payment service the player chose. */
+  payMethod?: 'TELEBIRR' | 'CBE';
   startedAt: number;
 }
 

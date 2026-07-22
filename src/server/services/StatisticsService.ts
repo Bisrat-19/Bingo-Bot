@@ -1,4 +1,4 @@
-import type { StatisticsRepository, LeaderboardRow } from '../repositories/statistics.repository';
+import type { StatisticsRepository } from '../repositories/statistics.repository';
 
 // Thin service over the statistics repository. Kept separate so game logic doesn't
 // depend on how stats are stored, and so it can be swapped/extended (e.g. Redis counters).
@@ -21,9 +21,6 @@ export class StatisticsService {
     return this.repo.incrementFalseBingos(userId);
   }
 
-  leaderboard(limit = 10): Promise<LeaderboardRow[]> {
-    return this.repo.leaderboard(limit);
-  }
 
   forUser(userId: string) {
     return this.repo.getByUser(userId);

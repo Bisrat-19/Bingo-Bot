@@ -68,6 +68,14 @@ export default function Page() {
   const invalidateRef = useRef(invalidate);
   invalidateRef.current = invalidate;
   const prevCoins = useRef<number | null>(null);
+  /**
+   * Polls overlap (they fire on an interval, not back-to-back), so responses can arrive
+   * out of order. A stale snapshot applied after a fresh one briefly resurrects old
+   * state — a just-released card flashing back to "taken". Sequence numbers make sure
+   * only ever-newer snapshots are applied.
+   */
+  const reqSeq = useRef(0);
+  const appliedSeq = useRef(0);
 
   useEffect(() => {
     initTelegram();
@@ -98,8 +106,11 @@ export default function Page() {
   }, []);
 
   const refresh = useCallback(async () => {
+    const seq = ++reqSeq.current;
     const s = await api.state();
     if (isErr(s)) return;
+    if (seq <= appliedSeq.current) return; // an older response finishing late — discard
+    appliedSeq.current = seq;
     const newly = s.called.filter((n) => !prevCalled.current.has(n));
     if (newly.length && !first.current) haptic('light');
     prevCalled.current = new Set(s.called);
@@ -392,7 +403,7 @@ export default function Page() {
             onLeave={() => void leaveTable()}
             onRefresh={() => void refresh()}
             poolSize={state.poolSize}
-            taken={state.takenCards.filter((n) => !myCardNumbers.includes(n))}
+            taken={state.takenCards.filter((n) => !myCardNumbers.includes(n) && !releasing.has(n))}
             mine={myCardNumbers}
             maxCards={state.maxCards}
             secondsLeft={state.secondsLeft}

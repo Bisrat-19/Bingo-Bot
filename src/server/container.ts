@@ -18,6 +18,7 @@ import { SettingsService } from './services/SettingsService';
 import { WalletService } from './services/WalletService';
 import { StatisticsService } from './services/StatisticsService';
 import { KeyedMutex } from './utils/Mutex';
+import { setWizard, startWizard } from './telegram/wizard';
 
 // Manual dependency-injection container. Composition happens exactly once, here.
 export interface AppContainer {
@@ -85,7 +86,10 @@ export function buildContainer(): AppContainer {
       `Name: <b>${tx.fullName}</b>\n` +
       `Phone: <code>${tx.phone}</code>\n` +
       `Amount: <b>${tx.amount}</b> birr\n` +
-      `Ref: <code>${tx.id.slice(-8)}</code>`;
+      (tx.payMethod ? `Via: <b>${tx.payMethod === 'CBE' ? 'CBE Birr' : 'Telebirr'}</b>\n` : '') +
+      `Ref: <code>${tx.id.slice(-8)}</code>` +
+      // The pasted payment SMS is the evidence — show it in full for verification.
+      (tx.smsText ? `\n\n📩 <b>Pasted SMS:</b>\n<code>${tx.smsText.slice(0, 800)}</code>` : '');
     const kb = Markup.inlineKeyboard([
       [
         Markup.button.callback('✅ Approve', `tx:approve:${tx.id}`),
@@ -122,6 +126,23 @@ export function buildContainer(): AppContainer {
       return;
     }
     const [, action, txId] = ctx.match as unknown as RegExpExecArray;
+
+    // Rejecting a WITHDRAWAL requires a reason the player will see. Collect it through
+    // a short wizard instead of rejecting blindly.
+    if (action === 'reject') {
+      const pending = await wallet.byId(txId);
+      if (pending?.type === 'WITHDRAWAL' && pending.status === 'PENDING') {
+        startWizard(ctx.from!.id, 'reject');
+        setWizard(ctx.from!.id, { step: 'value', configKey: txId });
+        await ctx.answerCbQuery();
+        await ctx.reply(
+          `✍️ Why is this withdrawal rejected?\nSend the reason — the player will see it.`,
+          { parse_mode: 'HTML' },
+        );
+        return;
+      }
+    }
+
     const res =
       action === 'approve' ? await wallet.approve(txId, from) : await wallet.reject(txId, from);
 
@@ -136,10 +157,10 @@ export function buildContainer(): AppContainer {
     const msg =
       action === 'approve'
         ? tx.type === 'DEPOSIT'
-          ? `✅ <b>Deposit approved</b>\n\n+<b>${amount}</b> birr added.\nNew balance: <b>${res.balance}</b>`
+          ? `✅ <b>Deposit approved</b>\n\nDeposited: <b>+${amount}</b> birr\nTotal balance: <b>${res.balance}</b> birr\n\nGood luck! 🎉`
           : `✅ <b>Withdrawal sent</b>\n\n<b>${amount}</b> birr sent to <code>${tx.phone}</code>.\nBalance: <b>${res.balance}</b>`
         : tx.type === 'DEPOSIT'
-          ? `❌ <b>Deposit rejected</b>\n\nRef <code>${tx.id.slice(-8)}</code>. Contact support if this is a mistake.`
+          ? `❌ <b>Deposit rejected</b>\n\nThe payment SMS you sent is incorrect or could not be verified.\nPlease check it and send a new deposit with the correct SMS.\nRef <code>${tx.id.slice(-8)}</code>`
           : `❌ <b>Withdrawal rejected</b>\n\nYour <b>${tx.amount}</b> birr has been returned.\nBalance: <b>${res.balance}</b>`;
 
     const target = await prisma.user.findUnique({ where: { id: tx.userId } });

@@ -1,6 +1,6 @@
 import { getContainer } from '@/server/container';
 import { jsonSafe, parseBody, requireAdmin } from '@/server/webapi';
-import { VALID_PATTERNS } from '@/server/services/SettingsService';
+import { LIMITS, VALID_PATTERNS } from '@/server/services/SettingsService';
 import { DEFAULT_INSTRUCTIONS, DEFAULT_SUPPORT, parseSupport } from '@/server/content/defaults';
 
 // Read (and optionally update) live game settings.
@@ -14,10 +14,28 @@ export async function POST(req: Request) {
   const patch = body.patch as Record<string, never> | undefined;
   const current = patch ? await settings.update(patch) : await settings.get();
 
+  // Anything the server clamped is reported, so no admin surface ever has to guess why
+  // a saved value differs from what was typed.
+  const adjusted: Record<string, { requested: number; applied: number; min: number; max: number }> = {};
+  if (patch) {
+    const cur = current as unknown as Record<string, unknown>;
+    for (const [key, range] of Object.entries(LIMITS)) {
+      if (!(key in patch)) continue;
+      if (['patterns', 'depositPhone', 'supportItems', 'instructionsText'].includes(key)) continue;
+      const requested = Math.round(Number((patch as Record<string, unknown>)[key]));
+      const applied = Number(cur[key]);
+      if (Number.isFinite(requested) && requested !== applied) {
+        adjusted[key] = { requested, applied, min: range[0], max: range[1] };
+      }
+    }
+  }
+
   return jsonSafe({
     ok: true,
     settings: current,
     validPatterns: VALID_PATTERNS,
+    limits: LIMITS,
+    adjusted,
     // What players actually see right now, with the built-in fallbacks applied. The
     // dashboard edits this rather than the raw column, which may legitimately be empty.
     effective: {

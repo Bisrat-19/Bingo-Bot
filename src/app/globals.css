@@ -392,9 +392,21 @@ body {
 
 /* ---- Card selection screen ---- */
 .select-screen {
+  /* The whole selection flow fits the phone exactly: viewport minus the bottom nav.
+     Every block shrinks with the screen instead of pushing the page into a scroll. */
+  height: calc(100dvh - 70px - var(--safe-bottom));
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: clamp(4px, 1.2dvh, 12px);
+  overflow: hidden;
+}
+.selbar,
+.boards-line,
+.select-head,
+.mine-strip,
+.preview-cartelas {
+  flex-shrink: 0;
 }
 .select-head {
   text-align: center;
@@ -402,7 +414,7 @@ body {
   /* Reserve exactly what the countdown state needs, derived from the timer's own font
      size plus the subtitle beneath it. A guessed constant was 5px short and the grid
      still shifted when the timer appeared. */
-  min-height: calc(clamp(34px, 12vw, 54px) + 28px);
+  min-height: calc(clamp(26px, min(12vw, 6dvh), 54px) + 24px);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -431,10 +443,15 @@ body {
 .card-pool {
   display: grid;
   grid-template-columns: repeat(10, minmax(0, 1fr));
-  gap: clamp(3px, 1vw, 5px);
+  grid-template-rows: repeat(10, minmax(0, 1fr));
+  /* Fixed, viewport-derived height: the grid can never resize because of anything
+     above or below it. */
+  flex: 0 0 auto;
+  height: min(50dvh, 96vw);
+  gap: clamp(2px, 0.9vw, 5px);
 }
 .pool-tile {
-  aspect-ratio: 1 / 0.9;
+  min-height: 0;
   border: 1.5px solid rgba(255, 255, 255, 0.25);
   border-radius: 7px;
   background: linear-gradient(180deg, #ffffff, #e4e4e4);
@@ -1929,11 +1946,11 @@ body {
   gap: 8px;
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: none;
+  overflow: hidden; /* the cards SHRINK to fit; nothing scrolls */
 }
-.gright::-webkit-scrollbar {
-  display: none;
+.gright .callcard,
+.gright .grow {
+  flex-shrink: 0;
 }
 .callcard {
   background: linear-gradient(135deg, #7d1199, #5c0d78);
@@ -1948,8 +1965,9 @@ body {
 .callcard-side {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: clamp(4px, 1vw, 7px);
   min-width: 0;
+  flex: 1 1 auto;
 }
 .callcard-label {
   font-weight: 900;
@@ -1958,12 +1976,14 @@ body {
 /* The three most recent calls, shown small next to the current ball. */
 .recent-balls {
   display: flex;
-  gap: 6px;
+  gap: clamp(3px, 1vw, 6px);
   flex-wrap: nowrap;
+  min-width: 0;
 }
 .mini-ball {
-  width: 40px;
-  height: 40px;
+  width: clamp(30px, 10vw, 42px);
+  aspect-ratio: 1;
+  height: auto;
   border-radius: 50%;
   background: #666;
   color: #fff;
@@ -1977,21 +1997,22 @@ body {
   flex-shrink: 0;
 }
 .mini-ball b {
-  font-size: 9px;
+  font-size: clamp(9px, 2.8vw, 11px);
   font-weight: 900;
-  opacity: 0.95;
-  line-height: 1;
+  opacity: 1;
+  line-height: 1.1;
 }
 .mini-ball i {
   font-style: normal;
-  font-size: 15px;
+  font-size: clamp(11px, 3.4vw, 16px);
   font-weight: 900;
-  line-height: 1.05;
+  line-height: 1.1;
 }
 
 .callball {
-  width: 74px;
-  height: 74px;
+  width: clamp(46px, 17vw, 74px);
+  aspect-ratio: 1;
+  height: auto;
   border-radius: 50%;
   background: #666; /* replaced by the .ball-* colour once a number is called */
   color: #fff;
@@ -2013,13 +2034,13 @@ body {
   100% { transform: scale(1); }
 }
 .cb-letter {
-  font-size: 15px;
+  font-size: clamp(10px, 3.4vw, 15px);
   font-weight: 900;
   line-height: 1;
   opacity: 0.95;
 }
 .cb-num {
-  font-size: 28px;
+  font-size: clamp(17px, 6vw, 28px);
   font-weight: 900;
   line-height: 1.05;
 }
@@ -2051,6 +2072,33 @@ body {
   border-radius: 12px;
   padding: 7px;
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+  /* Cards divide the remaining height between them and compress on short screens. */
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 48dvh;
+  display: flex;
+  flex-direction: column;
+}
+.cartela .card-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cartela .bingo-head {
+  flex-shrink: 0;
+}
+.cartela .card-grid {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: repeat(5, minmax(0, 1fr));
+}
+.cartela .pcell {
+  aspect-ratio: auto;
+  min-height: 0;
+}
+.gscreen.multi .cartela {
+  max-height: 36dvh;
 }
 /* Two boards: smaller cells and tighter tags so the pair fits the screen. */
 .gscreen.multi .cartela {
@@ -2061,8 +2109,7 @@ body {
   margin-bottom: 3px;
 }
 .gscreen.multi .cartela .pcell {
-  aspect-ratio: 1 / 0.78;
-  font-size: clamp(10px, 3.4vw, 16px);
+  font-size: clamp(10px, min(3.4vw, 2.4dvh), 16px);
 }
 .gscreen.multi .cartela .bingo-head > div {
   font-size: clamp(10px, 3.4vw, 15px);
@@ -2072,8 +2119,7 @@ body {
   padding: 7px 12px;
 }
 .gscreen.multi .callball {
-  width: 60px;
-  height: 60px;
+  width: clamp(42px, 14vw, 60px);
 }
 .cartela.ready {
   box-shadow: 0 0 0 2px var(--gold), 0 6px 20px rgba(255, 204, 51, 0.45);
@@ -2185,27 +2231,47 @@ body {
    One card is centred; two shrink to sit side by side without any scroll.
    Rendered from the cached catalog, so it shows the instant a card is tapped. */
 .preview-cartelas {
+  /* Takes ALL the space under the grid. The grid above is fixed-height, so this area
+     is constant too — cards render as large as it allows and never scroll. */
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   justify-content: center;
+  align-items: stretch;
   gap: 10px;
-  padding: 8px 12px 4px;
+  padding: 6px 12px 8px;
+  overflow: hidden;
+}
+.preview-empty {
+  align-self: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.35);
 }
 .mini-cartela {
   background: linear-gradient(160deg, #e9dcc0, #cdbb95);
   border-radius: 11px;
-  padding: 5px;
+  padding: 6px;
   box-shadow: 0 5px 14px rgba(0, 0, 0, 0.3);
-  width: min(48vw, 196px);
+  /* Height comes from the available space; width follows to keep the card shape. */
+  height: 100%;
+  aspect-ratio: 100 / 116;
+  max-width: min(72vw, 320px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  container-type: size;
 }
 /* Two side by side: each takes half the row, shrunk to fit — never scrolls. */
 .preview-cartelas.two .mini-cartela {
-  width: min(45vw, 196px);
+  max-width: 46vw;
   padding: 5px;
 }
 .mini-cartela-tag {
   text-align: center;
   font-weight: 900;
   font-size: 12px;
+  font-size: clamp(9px, 7cqh, 15px);
   color: #b8860b;
   margin-bottom: 4px;
 }
@@ -2214,6 +2280,15 @@ body {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: clamp(2px, 0.8vw, 4px);
+}
+.mini-cartela-tag,
+.mini-cartela-head {
+  flex-shrink: 0;
+}
+.mini-cartela-grid {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: repeat(5, minmax(0, 1fr));
 }
 .mini-cartela-head {
   margin-bottom: clamp(2px, 0.8vw, 4px);
@@ -2225,6 +2300,7 @@ body {
   border-radius: 5px;
   padding: 2px 0;
   font-size: clamp(9px, 2.8vw, 13px);
+  font-size: clamp(7px, 8cqh, 17px);
 }
 .mc-h.b { background: var(--b); }
 .mc-h.i { background: var(--i); }
@@ -2232,7 +2308,7 @@ body {
 .mc-h.g { background: var(--g); }
 .mc-h.o { background: var(--o); }
 .mc-cell {
-  aspect-ratio: 1 / 0.74;
+  min-height: 0;
   display: grid;
   place-items: center;
   border-radius: 5px;
@@ -2240,10 +2316,14 @@ body {
   border: 1px solid #b9ac8a;
   color: #1a1a1a;
   font-weight: 800;
-  font-size: clamp(9px, 2.7vw, 14px);
+  /* Fallback for engines without container units, then the container-scaled size:
+     the number tracks the CARD's height, not the viewport. */
+  font-size: clamp(10px, 3.6vw, 19px);
+  font-size: clamp(8px, 9.5cqh, 24px);
 }
 .preview-cartelas.two .mc-cell {
-  font-size: clamp(8px, 2.3vw, 12px);
+  font-size: clamp(9px, 3vw, 16px);
+  font-size: clamp(7px, 9.5cqh, 20px);
 }
 .mc-cell.free {
   background: radial-gradient(circle, #fff6d8, #ffe08a);
@@ -2253,3 +2333,25 @@ body {
 /* lucide wallet icon in the home balance chip */
 .wallet-chip { display: inline-flex; align-items: center; gap: 7px; }
 .wallet-chip svg { flex-shrink: 0; }
+
+/* ---- History skeleton loading -------------------------------------------
+   Placeholder cards shown while the first load is in flight, so the screen
+   keeps its shape instead of flashing "Loading" text. */
+.gcard.skeleton {
+  pointer-events: none;
+}
+.sk {
+  background: linear-gradient(90deg, #ece2f2 25%, #f7f1fa 50%, #ece2f2 75%);
+  background-size: 200% 100%;
+  animation: skshimmer 1.2s infinite;
+  border-radius: 6px;
+}
+@keyframes skshimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.sk-id { width: 42%; height: 15px; }
+.sk-result { width: 46px; height: 13px; }
+.sk-date { width: 55%; height: 11px; margin: 6px 0 10px; }
+.sk-pill { height: 30px; border-radius: 8px; }
+.sk-foot { width: 34%; height: 11px; margin-top: 9px; }

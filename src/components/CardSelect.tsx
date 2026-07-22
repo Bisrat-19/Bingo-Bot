@@ -178,17 +178,17 @@ function CardSelectImpl({
         })}
       </div>
 
-      {/* Preview of the cards you hold, below the grid. One card is centred; two sit
-          side by side, shrunk so they never scroll. Rendered from the cached catalog,
-          so it appears the instant a card is tapped. */}
-      {mine.length > 0 && catalog && (
-        <div className={'preview-cartelas' + (mine.length > 1 ? ' two' : '')}>
-          {mine.map((n) => {
+      {/* Preview of the cards you hold, below the grid. The container is ALWAYS
+          rendered at a fixed height: if it appeared only when a card is picked, the
+          grid above would resize on every select/deselect. */}
+      <div className={'preview-cartelas' + (mine.length > 1 ? ' two' : '')}>
+        {catalog &&
+          mine.map((n) => {
             const card = catalog.get(n);
             return card ? <MiniCartela key={n} number={n} card={card} /> : null;
           })}
-        </div>
-      )}
+        {mine.length === 0 && <div className="preview-empty">Your cards will show here</div>}
+      </div>
     </div>
   );
 }

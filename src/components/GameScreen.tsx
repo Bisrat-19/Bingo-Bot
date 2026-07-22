@@ -55,7 +55,7 @@ function GameScreenImpl({
           <div className="gs-v">{state.entryFee}</div>
         </div>
         <div className="gstat">
-          <div className="gs-k">Prize</div>
+          <div className="gs-k">Win</div>
           <div className="gs-v gold">{state.winAmount}</div>
         </div>
       </div>

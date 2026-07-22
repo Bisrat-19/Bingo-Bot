@@ -32,7 +32,25 @@ export function HistoryScreen() {
         </button>
       </div>
 
-      {games === undefined && <div className="ps-empty">Loading…</div>}
+      {/* Skeleton cards while the first load is in flight: the screen keeps its shape
+          instead of flashing empty then popping in. */}
+      {games === undefined &&
+        Array.from({ length: 4 }, (_, i) => (
+          <div className="gcard skeleton" key={i} aria-hidden>
+            <div className="gcard-top">
+              <div className="sk sk-id" />
+              <div className="sk sk-result" />
+            </div>
+            <div className="sk sk-date" />
+            <div className="gcard-grid">
+              <div className="sk sk-pill" />
+              <div className="sk sk-pill" />
+              <div className="sk sk-pill" />
+              <div className="sk sk-pill" />
+            </div>
+            <div className="sk sk-foot" />
+          </div>
+        ))}
 
       {games?.map((g) => (
         <div className="gcard" key={g.code}>

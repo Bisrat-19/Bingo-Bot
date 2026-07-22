@@ -1,9 +1,5 @@
 import type { PrismaClient, Statistics } from '@prisma/client';
 
-export type LeaderboardRow = Statistics & {
-  user: { username: string | null; firstName: string | null };
-};
-
 export class StatisticsRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -54,13 +50,5 @@ export class StatisticsRepository {
 
   getByUser(userId: string): Promise<Statistics | null> {
     return this.prisma.statistics.findUnique({ where: { userId } });
-  }
-
-  leaderboard(limit = 10): Promise<LeaderboardRow[]> {
-    return this.prisma.statistics.findMany({
-      orderBy: [{ gamesWon: 'desc' }, { gamesPlayed: 'desc' }],
-      take: limit,
-      include: { user: { select: { username: true, firstName: true } } },
-    });
   }
 }

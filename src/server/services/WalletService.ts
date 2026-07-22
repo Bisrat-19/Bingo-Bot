@@ -6,7 +6,10 @@ export interface CreateDepositInput {
   amount: number;
   fullName: string;
   phone: string;
-  receiptFileId: string;
+  /** Legacy photo receipts. New deposits paste the payment SMS instead. */
+  receiptFileId?: string;
+  smsText?: string;
+  payMethod?: 'TELEBIRR' | 'CBE';
 }
 
 export interface CreateWithdrawalInput {
@@ -14,6 +17,7 @@ export interface CreateWithdrawalInput {
   amount: number;
   fullName: string;
   phone: string;
+  payMethod?: 'TELEBIRR' | 'CBE';
 }
 
 export type WalletResult<T = object> = ({ ok: true } & T) | { ok: false; reason: string };
@@ -204,6 +208,8 @@ export class WalletService {
         fullName: input.fullName,
         phone: input.phone,
         receiptFileId: input.receiptFileId,
+        smsText: input.smsText,
+        payMethod: input.payMethod,
       },
     });
     this.logger.info({ txId: tx.id, amount: tx.amount }, 'deposit request created');
@@ -254,6 +260,7 @@ export class WalletService {
         amount: input.amount,
         fullName: input.fullName,
         phone: input.phone,
+        payMethod: input.payMethod,
       },
     });
 

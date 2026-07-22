@@ -36,8 +36,12 @@ model Settings {
   houseCutPercent       Int      @default(20)
   minDeposit            Int      @default(10)
   minWithdrawal         Int      @default(10)
-  /// Telebirr number shown to users on the deposit screen.
+  /// Telebirr number players deposit to.
   depositPhone          String   @default("0936093033")
+  /// CBE Birr number players deposit to.
+  cbeBirrPhone          String   @default("")
+  /// Hours promised to review and send a withdrawal.
+  withdrawHours         Int      @default(2)
   /// Support contacts shown by the Support button, as [{ label, handle }].
   /// Admins add, edit and remove entries at runtime.
   supportItems          Json     @default("[]")
@@ -203,8 +207,12 @@ model Transaction {
 
   fullName String
   phone    String
-  /// Telegram file_id of the receipt photo (deposits only).
+  /// Telegram file_id of the receipt photo (legacy deposits only).
   receiptFileId String?
+  /// The payment SMS the player pasted (current deposit flow verifies TEXT, not photos).
+  smsText       String?
+  /// Which service the player paid through: TELEBIRR or CBE.
+  payMethod     String?
 
   /// The receipt image itself, stored by us (see ReceiptFile).
   receipt ReceiptFile?

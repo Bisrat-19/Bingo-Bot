@@ -37,11 +37,13 @@ export async function POST(req: Request) {
   const msg =
     action === 'approve'
       ? tx.type === 'DEPOSIT'
-        ? `✅ <b>Deposit approved</b>\n\n+<b>${amount}</b> birr added.\nNew balance: <b>${res.balance}</b>`
+        ? `✅ <b>Deposit approved</b>\n\nDeposited: <b>+${amount}</b> birr\nTotal balance: <b>${res.balance}</b> birr\n\nGood luck! 🎉`
         : `✅ <b>Withdrawal sent</b>\n\n<b>${amount}</b> birr sent to <code>${tx.phone}</code>.\nBalance: <b>${res.balance}</b>`
       : tx.type === 'DEPOSIT'
-        ? `❌ <b>Deposit rejected</b>\n\nRef <code>${tx.id.slice(-8)}</code>.`
-        : `❌ <b>Withdrawal rejected</b>\n\nYour <b>${tx.amount}</b> birr has been returned.\nBalance: <b>${res.balance}</b>`;
+        ? `❌ <b>Deposit rejected</b>\n\nThe payment SMS you sent is incorrect or could not be verified.\nPlease check it and send a new deposit with the correct SMS.\nRef <code>${tx.id.slice(-8)}</code>`
+        : `❌ <b>Withdrawal rejected</b>\n\n` +
+          (note ? `Reason: <b>${note}</b>\n\n` : '') +
+          `Your <b>${tx.amount}</b> birr has been returned to your balance.\nBalance: <b>${res.balance}</b> birr`;
 
   const user = await prisma.user.findUnique({ where: { id: tx.userId } });
   if (user) {

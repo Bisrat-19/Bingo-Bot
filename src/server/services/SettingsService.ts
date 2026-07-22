@@ -15,10 +15,14 @@ export interface EditableSettings {
   houseCutPercent: number;
   minDeposit: number;
   minWithdrawal: number;
+  /** Hours promised for withdrawal review. */
+  withdrawHours: number;
   /** How many cards one player may hold in a round. */
   maxCardsPerPlayer: number;
   /** Telebirr number shown on the deposit screen. */
   depositPhone: string;
+  /** CBE Birr number shown on the deposit screen. */
+  cbeBirrPhone: string;
   /** Support contacts shown by the Support button. */
   supportItems: SupportItem[];
   /** Instructions text. Empty falls back to the built-in default. */
@@ -33,8 +37,9 @@ export const VALID_PATTERNS = [
   'FULL_HOUSE',
 ] as const;
 
-// Bounds so an admin can't set something that breaks the game.
-const LIMITS: Record<keyof EditableSettings, [number, number]> = {
+// Bounds so an admin can't set something that breaks the game. Exported so both admin
+// surfaces can show the allowed range instead of silently clamping.
+export const LIMITS: Record<keyof EditableSettings, [number, number]> = {
   selectionSeconds: [5, 600],
   drawIntervalSeconds: [2, 120],
   winnerDisplaySeconds: [2, 120],
@@ -45,11 +50,13 @@ const LIMITS: Record<keyof EditableSettings, [number, number]> = {
   falseBingoCooldownSec: [0, 300],
   patterns: [0, 0], // handled separately (not numeric)
   depositPhone: [0, 0], // handled separately (not numeric)
+  cbeBirrPhone: [0, 0], // handled separately (not numeric)
   supportItems: [0, 0], // handled separately (not numeric)
   instructionsText: [0, 0], // handled separately (not numeric)
   houseCutPercent: [1, 100],
   minDeposit: [1, 1_000_000],
   minWithdrawal: [1, 1_000_000],
+  withdrawHours: [1, 72],
 };
 
 /**
@@ -84,7 +91,7 @@ export class SettingsService {
       [number, number],
     ][]) {
       // Non-numeric fields are handled below.
-      if (key === 'patterns' || key === 'depositPhone') continue;
+      if (key === 'patterns' || key === 'depositPhone' || key === 'cbeBirrPhone') continue;
       if (key === 'supportItems' || key === 'instructionsText') continue;
       const value = patch[key];
       if (value === undefined || value === null) continue;
@@ -103,6 +110,10 @@ export class SettingsService {
 
     if (typeof patch.depositPhone === 'string' && patch.depositPhone.trim()) {
       data.depositPhone = patch.depositPhone.trim().slice(0, 32);
+    }
+    // Empty is allowed: it hides the CBE option until a number is configured.
+    if (typeof patch.cbeBirrPhone === 'string') {
+      data.cbeBirrPhone = patch.cbeBirrPhone.trim().slice(0, 32);
     }
 
     // Support contacts: drop blank rows and cap the list so the message stays readable.

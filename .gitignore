@@ -19,3 +19,5 @@ coverage/
 
 # local tooling (cloudflared binary)
 bin/
+.tools/
+.logs/

@@ -1,5 +1,6 @@
 import { Markup, type Context, type Telegraf } from 'telegraf';
 import { config } from '../config/env';
+import { LIMITS } from '../services/SettingsService';
 import type { SettingsService } from '../services/SettingsService';
 import type { WalletService } from '../services/WalletService';
 import { clearWizard, getWizard, setWizard, startWizard } from '../telegram/wizard';
@@ -12,6 +13,19 @@ import { DEFAULT_INSTRUCTIONS, type SupportItem } from '../content/defaults';
 // The bot is the entry point; the game itself lives in the Mini App (one continuous room).
 
 const CANCEL = '❌ Cancel';
+
+/** Strip separators and convert +2519…/2519… to the local 09… form. */
+function normalizePhone(raw: string): string {
+  let p = raw.replace(/[\s\-()]/g, '');
+  if (p.startsWith('+251')) p = '0' + p.slice(4);
+  else if (p.startsWith('251') && p.length === 12) p = '0' + p.slice(3);
+  return p;
+}
+
+const PHONE_RE = /^09\d{8}$/;
+const PHONE_HINT =
+  'The number must start with <b>09</b> and be exactly <b>10 digits</b>.\n' +
+  'Example: <code>0912345678</code>';
 
 export function registerHandlers(
   bot: Telegraf,
@@ -84,7 +98,7 @@ export function registerHandlers(
     setWizard(ctx.from.id, { step: 'phone' });
     await ctx.reply(
       `📝 <b>Registration</b>\n\nWe just need your <b>phone number</b>.\n\n` +
-        `Tap the button below to share it automatically, or type it.`,
+        `Tap the button below to share it automatically, or type it.\n${PHONE_HINT}`,
       { parse_mode: 'HTML', ...phoneKeyboard() },
     );
   });
@@ -93,7 +107,7 @@ export function registerHandlers(
   bot.on('contact', async (ctx) => {
     const wiz = getWizard(ctx.from.id);
     if (!wiz || wiz.flow !== 'register') return;
-    await completeRegistration(ctx, ctx.message.contact.phone_number);
+    await completeRegistration(ctx, normalizePhone(ctx.message.contact.phone_number));
   });
 
   /** Instructions text: whatever the admin saved, or the built-in default. */
@@ -160,15 +174,69 @@ export function registerHandlers(
     if (!user?.registered) return;
     const s = await settings.get();
     startWizard(ctx.from.id, 'deposit');
-    setWizard(ctx.from.id, { step: 'name' });
+    setWizard(ctx.from.id, { step: 'amount' });
     await ctx.reply(
-      `💰 <b>Deposit</b>\n\n1️⃣ Send the money via <b>Telebirr</b> to:\n\n` +
-        `📱 <code>${s.depositPhone}</code>\n\n` +
-        `2️⃣ Then send me your details so we can verify it.\n` +
-        `Minimum deposit: <b>${s.minDeposit}</b> birr.\n\n` +
-        `👤 What is your <b>full name</b>?`,
+      `💰 <b>Deposit</b>\n\n` +
+        `💵 How much do you want to deposit?\n` +
+        `Minimum: <b>${s.minDeposit}</b> birr\n\n` +
+        `Send the amount as a number, e.g. <code>${s.minDeposit}</code>`,
       { parse_mode: 'HTML', ...cancelKb },
     );
+  });
+
+  /** Amharic payment instructions for the chosen service, with the player's amount. */
+  const depositInstructions = (
+    method: 'TELEBIRR' | 'CBE',
+    phone: string,
+    amount: number,
+  ): string => {
+    const name = method === 'TELEBIRR' ? 'Tele-Birr' : 'CBE Birr';
+    const icon = method === 'TELEBIRR' ? '📱' : '🏦';
+    const birr = `${amount}.00`;
+    return (
+      `${icon} <b>${name}</b>\n\n` +
+      `<code>${esc(phone)}</code>\n\n` +
+      `የ${name} መመሪያ፦\n\n` +
+      `1. ከላይ ባለው የ ${name} ${method === 'TELEBIRR' ? 'አካውንት' : 'ቁጥር'} <b>${birr} ብር</b> ያስገቡ\n` +
+      `2. የከፈላችሁበትን የግብይት መረጃ የያዘ አጭር መልእክት (SMS) ከ ${name} ይደርስዎታል\n` +
+      `3. ያገኙትን SMS በሙሉ ኮፒ በማድረግ እዚህ በታች ያለው ቴሌግራም መልእክት ቦታ ውስጥ ፔስት በማድረግ ይላኩት`
+    );
+  };
+
+  // Withdrawal payout service -> ask for the receiving phone number.
+  bot.action(/^wd:(tb|cbe)$/, async (ctx) => {
+    const wiz = getWizard(ctx.from.id);
+    if (!wiz || wiz.flow !== 'withdraw' || wiz.step !== 'method' || !wiz.amount) {
+      return void ctx.answerCbQuery('Start again with 💸 Withdraw.', { show_alert: true });
+    }
+    const method = (ctx.match as unknown as RegExpExecArray)[1] === 'tb' ? 'TELEBIRR' : 'CBE';
+    setWizard(ctx.from.id, { step: 'phone', payMethod: method });
+    await ctx.answerCbQuery();
+    await ctx.reply(
+      `📱 Send the <b>${method === 'CBE' ? 'CBE Birr' : 'Telebirr'} phone number</b> that should receive the money.\n\n${PHONE_HINT}`,
+      { parse_mode: 'HTML', ...cancelKb },
+    );
+  });
+
+  // Payment-method choice -> show that service's number + instructions, then wait for
+  // the pasted SMS. Photos are no longer part of the deposit flow at all.
+  bot.action(/^dep:(tb|cbe)$/, async (ctx) => {
+    const wiz = getWizard(ctx.from.id);
+    if (!wiz || wiz.flow !== 'deposit' || wiz.step !== 'method' || !wiz.amount) {
+      return void ctx.answerCbQuery('Start again with 💰 Deposit.', { show_alert: true });
+    }
+    const s = await settings.get();
+    const method = (ctx.match as unknown as RegExpExecArray)[1] === 'tb' ? 'TELEBIRR' : 'CBE';
+    const phone = method === 'TELEBIRR' ? s.depositPhone : s.cbeBirrPhone;
+    if (!phone) {
+      return void ctx.answerCbQuery('That payment option is not available right now.', { show_alert: true });
+    }
+    setWizard(ctx.from.id, { step: 'sms', payMethod: method });
+    await ctx.answerCbQuery();
+    await ctx.reply(depositInstructions(method, phone, wiz.amount), {
+      parse_mode: 'HTML',
+      ...cancelKb,
+    });
   });
 
   bot.hears(BTN.withdraw, async (ctx) => {
@@ -183,9 +251,12 @@ export function registerHandlers(
       return;
     }
     startWizard(ctx.from.id, 'withdraw');
+    setWizard(ctx.from.id, { step: 'amount' });
     await ctx.reply(
-      `💸 <b>Withdraw</b>\n\nBalance: <b>${user.coins}</b> birr\nMinimum: <b>${s.minWithdrawal}</b>\n\n` +
-        `👤 What is your <b>full name</b>?`,
+      `💸 <b>Withdraw</b>\n\n` +
+        `Your balance: <b>${user.coins}</b> birr\n` +
+        `Minimum withdrawal: <b>${s.minWithdrawal}</b> birr\n\n` +
+        `💵 How much do you want to withdraw?`,
       { parse_mode: 'HTML', ...cancelKb },
     );
   });
@@ -198,48 +269,18 @@ export function registerHandlers(
     });
   });
 
-  // Receipt photo (final step of a deposit)
+  // Deposits are verified by the pasted payment SMS, not photos. If someone sends a
+  // screenshot mid-deposit anyway, explain what we actually need.
   bot.on('photo', async (ctx) => {
     const wiz = getWizard(ctx.from.id);
-    if (!wiz || wiz.flow !== 'deposit' || wiz.step !== 'receipt') return;
-    const user = await ensure(ctx);
-    if (!user) return;
-
-    const photos = ctx.message.photo;
-    const fileId = photos[photos.length - 1].file_id; // largest size
-    const tx = await wallet.createDeposit({
-      userId: user.id,
-      amount: wiz.amount ?? 0,
-      fullName: wiz.fullName ?? '',
-      phone: wiz.phone ?? '',
-      receiptFileId: fileId,
-    });
-    clearWizard(ctx.from.id);
-
-    // Keep our own copy of the receipt. Non-fatal: the deposit still stands if Telegram
-    // is briefly unreachable — we retain the file_id as a fallback.
-    try {
-      const link = await ctx.telegram.getFileLink(fileId);
-      const resp = await fetch(link.href);
-      if (resp.ok) {
-        const buf = Buffer.from(await resp.arrayBuffer());
-        const ct = resp.headers.get('content-type') ?? '';
-        // Telegram's file CDN often replies application/octet-stream; photos are JPEG.
-        await wallet.storeReceipt(tx.id, buf, ct.startsWith('image/') ? ct : 'image/jpeg');
-      }
-    } catch {
-      /* fall back to the Telegram file_id */
-    }
-
+    if (!wiz || wiz.flow !== 'deposit') return;
     await ctx.reply(
-      `✅ <b>Deposit submitted</b>\n\nAmount: <b>${tx.amount}</b> birr\nReference: <code>${tx.id.slice(-8)}</code>\n\n` +
-        `An admin will verify your receipt. You'll get a message as soon as it's approved.`,
-      { parse_mode: 'HTML', ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}) },
+      '🚫 Photos and screenshots are not accepted.\n\n' +
+        'Please COPY the payment SMS you received and PASTE it here as text.',
+      { ...cancelKb },
     );
-    await notifyAdmins(tx.id);
   });
 
-  // Free-text steps for both wizards
   bot.on('text', async (ctx, next) => {
     const wiz = getWizard(ctx.from.id);
     if (!wiz) return next();
@@ -367,50 +408,152 @@ export function registerHandlers(
         return;
       }
 
+      let requested: number | null = null;
       if (key === 'depositPhone') {
         await settings.update({ depositPhone: text });
+      } else if (key === 'cbeBirrPhone') {
+        await settings.update({ cbeBirrPhone: text });
       } else {
         const n = Math.floor(Number(text));
         if (!Number.isFinite(n)) {
           return void ctx.reply('Please send a number.', { ...cancelKb });
         }
+        requested = n;
         await settings.update({ [key]: n } as never);
       }
 
       const saved = await settings.get();
       const shown = (saved as unknown as Record<string, unknown>)[key];
-      await ctx.reply(`✅ Saved — <b>${String(shown)}</b>`, {
-        parse_mode: 'HTML',
-        ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}),
-      });
+      // If the value was clamped to the allowed range, say so — never let an admin
+      // wonder why the number they typed is not the number on screen.
+      const lim = (LIMITS as Record<string, [number, number]>)[key];
+      const clamped = requested !== null && Number(shown) !== requested;
+      await ctx.reply(
+        clamped
+          ? `⚠️ <b>${requested}</b> is outside the allowed <b>${lim[0]}–${lim[1]}</b>.\nSaved as <b>${String(shown)}</b>.`
+          : `✅ Saved — <b>${String(shown)}</b>`,
+        {
+          parse_mode: 'HTML',
+          ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}),
+        },
+      );
       await showAdminPanel(ctx);
       return;
     }
 
-    if (wiz.step === 'name') {
-      if (text.length < 3) return void ctx.reply('Please send your full name.');
-
-      // Deposits reuse the phone number collected at registration — no need to re-ask.
-      if (wiz.flow === 'deposit' && user.phone) {
-        setWizard(ctx.from.id, { fullName: text, phone: user.phone, step: 'amount' });
-        await ctx.reply(
-          `📱 Using your registered number: <code>${esc(user.phone)}</code>\n\n` +
-            `💵 How much did you send? (minimum <b>${s.minDeposit}</b>)`,
-          { parse_mode: 'HTML', ...cancelKb },
-        );
-        return;
+    // Registration: the player typed their phone instead of sharing the contact.
+    if (wiz.flow === 'register' && wiz.step === 'phone') {
+      const phone = normalizePhone(text);
+      if (!PHONE_RE.test(phone)) {
+        return void ctx.reply(`❌ That is not a valid phone number.\n\n${PHONE_HINT}`, {
+          parse_mode: 'HTML',
+          ...phoneKeyboard(),
+        });
       }
-
-      setWizard(ctx.from.id, { fullName: text, step: 'phone' });
-      await ctx.reply('📱 Now send your <b>phone number</b>:', { parse_mode: 'HTML', ...cancelKb });
+      await completeRegistration(ctx, phone);
       return;
     }
 
-    if (wiz.step === 'phone') {
-      if (!/^[0-9+\s-]{9,15}$/.test(text)) return void ctx.reply('Please send a valid phone number.');
-      setWizard(ctx.from.id, { phone: text, step: 'amount' });
-      const min = wiz.flow === 'deposit' ? s.minDeposit : s.minWithdrawal;
-      await ctx.reply(`💵 How much? (minimum <b>${min}</b>)`, { parse_mode: 'HTML', ...cancelKb });
+    // Admin typing the reason for a withdrawal rejection.
+    if (wiz.flow === 'reject' && wiz.configKey) {
+      const txId = wiz.configKey;
+      clearWizard(ctx.from.id);
+      const res = await wallet.reject(txId, String(ctx.from.id), text);
+      if (!res.ok) {
+        return void ctx.reply(`❌ ${res.reason}`, { ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}) });
+      }
+      const tx = res.tx;
+      await ctx.reply(`❌ Rejected — the player has been told why.`, {
+        ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}),
+      });
+      const target = await room.userById(tx.userId);
+      if (target) {
+        await ctx.telegram
+          .sendMessage(
+            target.telegramId.toString(),
+            `❌ <b>Withdrawal rejected</b>\n\n` +
+              `Reason: <b>${esc(text)}</b>\n\n` +
+              `Your <b>${tx.amount}</b> birr has been returned to your balance.\n` +
+              `Balance: <b>${res.balance}</b> birr`,
+            { parse_mode: 'HTML' },
+          )
+          .catch(() => {});
+      }
+      return;
+    }
+
+    if (wiz.flow === 'deposit' && wiz.step === 'sms') {
+      // A real payment SMS is a sentence with a reference — not a couple of words.
+      if (text.length < 20) {
+        return void ctx.reply(
+          'That does not look like a payment SMS. Please copy the WHOLE message you received and paste it here.',
+          { ...cancelKb },
+        );
+      }
+      const tx = await wallet.createDeposit({
+        userId: user.id,
+        amount: wiz.amount ?? 0,
+        fullName: displayName(user),
+        phone: user.phone ?? '-',
+        smsText: text,
+        payMethod: wiz.payMethod,
+      });
+      clearWizard(ctx.from.id);
+      await ctx.reply(
+        `✅ <b>Deposit submitted</b>\n\n` +
+          `Amount: <b>${tx.amount}</b> birr\n` +
+          `Via: <b>${wiz.payMethod === 'CBE' ? 'CBE Birr' : 'Telebirr'}</b>\n` +
+          `Reference: <code>${tx.id.slice(-8)}</code>\n\n` +
+          `An admin is verifying your payment. You'll get a message the moment it's approved.`,
+        { parse_mode: 'HTML', ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}) },
+      );
+      await notifyAdmins(tx.id);
+      return;
+    }
+
+    if (wiz.flow === 'withdraw' && wiz.step === 'name') {
+      if (text.length < 3) return void ctx.reply('Please send the full name of the account owner.');
+
+      const res = await wallet.createWithdrawal({
+        userId: user.id,
+        amount: wiz.amount ?? 0,
+        fullName: text,
+        phone: wiz.phone ?? '',
+        payMethod: wiz.payMethod,
+      });
+      clearWizard(ctx.from.id);
+      if (!res.ok) {
+        await ctx.reply(`❌ ${res.reason}`, { ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}) });
+        return;
+      }
+      const service = wiz.payMethod === 'CBE' ? 'CBE Birr' : 'Telebirr';
+      await ctx.reply(
+        `✅ <b>Withdrawal requested</b>\n\n` +
+          `Amount: <b>${wiz.amount}</b> birr\n` +
+          `To: <code>${esc(wiz.phone ?? '')}</code> (${service})\n` +
+          `Account name: <b>${esc(text)}</b>\n` +
+          `Reference: <code>${res.tx.id.slice(-8)}</code>\n\n` +
+          `Your birr is on hold. It will be reviewed and sent within <b>${s.withdrawHours} hour${s.withdrawHours === 1 ? '' : 's'}</b>.`,
+        { parse_mode: 'HTML', ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}) },
+      );
+      await notifyAdmins(res.tx.id);
+      return;
+    }
+
+    if (wiz.flow === 'withdraw' && wiz.step === 'phone') {
+      const phone = normalizePhone(text);
+      if (!PHONE_RE.test(phone)) {
+        return void ctx.reply(`❌ That is not a valid phone number.\n\n${PHONE_HINT}`, {
+          parse_mode: 'HTML',
+          ...cancelKb,
+        });
+      }
+      setWizard(ctx.from.id, { phone, step: 'name' });
+      await ctx.reply(
+        `👤 Now send the <b>full name of the account owner</b> for <code>${esc(phone)}</code>,\n` +
+          `so we can make sure the money goes to the right person.`,
+        { parse_mode: 'HTML', ...cancelKb },
+      );
       return;
     }
 
@@ -422,36 +565,30 @@ export function registerHandlers(
       }
 
       if (wiz.flow === 'deposit') {
-        setWizard(ctx.from.id, { amount, step: 'receipt' });
+        setWizard(ctx.from.id, { amount, step: 'method' });
+        const buttons = [Markup.button.callback('📱 Telebirr', 'dep:tb')];
+        if (s.cbeBirrPhone) buttons.push(Markup.button.callback('🏦 CBE Birr', 'dep:cbe'));
         await ctx.reply(
-          `🧾 Last step — send a <b>photo of your Telebirr receipt</b>.`,
-          { parse_mode: 'HTML', ...cancelKb },
+          `💳 <b>${amount} birr</b> — how will you pay?`,
+          { parse_mode: 'HTML', ...Markup.inlineKeyboard([buttons]) },
         );
         return;
       }
 
-      // withdrawal: holds the coins immediately
+      // withdrawal: pick the payout service next
       if (amount > user.coins) {
         return void ctx.reply(`You only have ${user.coins} birr.`);
       }
-      const res = await wallet.createWithdrawal({
-        userId: user.id,
-        amount,
-        fullName: wiz.fullName ?? '',
-        phone: wiz.phone ?? '',
+      setWizard(ctx.from.id, { amount, step: 'method' });
+      await ctx.reply(`💳 <b>${amount} birr</b> — where should we send it?`, {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('📱 Telebirr', 'wd:tb'),
+            Markup.button.callback('🏦 CBE Birr', 'wd:cbe'),
+          ],
+        ]),
       });
-      clearWizard(ctx.from.id);
-      if (!res.ok) {
-        await ctx.reply(`❌ ${res.reason}`, { ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}) });
-        return;
-      }
-      await ctx.reply(
-        `✅ <b>Withdrawal requested</b>\n\nAmount: <b>${amount}</b> birr\nTo: <b>${wiz.phone}</b>\n` +
-          `Reference: <code>${res.tx.id.slice(-8)}</code>\n\n` +
-          `The birr is on hold. You'll be notified once the money is sent.`,
-        { parse_mode: 'HTML', ...(mainMenuKeyboard(user.id, user.telegramId) ?? {}) },
-      );
-      await notifyAdmins(res.tx.id);
       return;
     }
 
@@ -464,18 +601,21 @@ export function registerHandlers(
     config.ADMIN_TELEGRAM_IDS.includes(String(ctx.from?.id ?? ''));
 
   /** Numeric settings the admin can edit from the bot. */
-  const CFG: { key: string; label: string; unit?: string }[] = [
-    { key: 'selectionSeconds', label: 'Selection window', unit: 's' },
-    { key: 'drawIntervalSeconds', label: 'Draw interval', unit: 's' },
-    { key: 'winnerDisplaySeconds', label: 'Winner display', unit: 's' },
-    { key: 'minPlayers', label: 'Min players' },
-    { key: 'startingCoins', label: 'Starting birr' },
-    { key: 'entryFee', label: 'Entry fee' },
-    { key: 'maxCardsPerPlayer', label: 'Cards per player' },
-    { key: 'houseCutPercent', label: 'House cut', unit: '%' },
-    { key: 'minDeposit', label: 'Min deposit' },
-    { key: 'minWithdrawal', label: 'Min withdrawal' },
-    { key: 'falseBingoCooldownSec', label: 'Wrong-bingo cooldown', unit: 's' },
+  // Same names and descriptions as the web dashboard, so both admin surfaces speak
+  // one language.
+  const CFG: { key: string; label: string; desc: string; unit?: string }[] = [
+    { key: 'entryFee', label: 'Stake per card', desc: 'Birr charged for each card a player takes' },
+    { key: 'houseCutPercent', label: 'House cut', desc: 'Percent the house keeps; the winner gets the rest', unit: '%' },
+    { key: 'startingCoins', label: 'Welcome bonus', desc: 'Birr given once when a player registers' },
+    { key: 'maxCardsPerPlayer', label: 'Cards per player', desc: 'Most cards one player may hold in a round' },
+    { key: 'selectionSeconds', label: 'Card selection time', desc: 'Seconds players get to pick cards', unit: 's' },
+    { key: 'drawIntervalSeconds', label: 'Number call speed', desc: 'Seconds between called numbers', unit: 's' },
+    { key: 'winnerDisplaySeconds', label: 'Winner screen time', desc: 'Seconds the winner is shown', unit: 's' },
+    { key: 'minPlayers', label: 'Minimum players', desc: 'Players required for a round to start' },
+    { key: 'minDeposit', label: 'Minimum deposit', desc: 'Smallest deposit a player may request' },
+    { key: 'minWithdrawal', label: 'Minimum withdrawal', desc: 'Smallest withdrawal a player may request' },
+    { key: 'withdrawHours', label: 'Withdrawal time', desc: 'Hours promised to review and send a withdrawal', unit: 'h' },
+    { key: 'falseBingoCooldownSec', label: 'Wrong-bingo cooldown', desc: 'Seconds blocked after a false BINGO; 0 = off', unit: 's' },
   ];
 
   const PATTERN_KEYS = ['HORIZONTAL', 'VERTICAL', 'DIAGONAL', 'FOUR_CORNERS', 'FULL_HOUSE'];
@@ -490,6 +630,7 @@ export function registerHandlers(
       '',
       ...CFG.map((f) => `${f.label}: <b>${rec[f.key]}${f.unit ?? ''}</b>`),
       `Telebirr number: <code>${s.depositPhone}</code>`,
+      `CBE Birr number: <code>${s.cbeBirrPhone || 'not set'}</code>`,
       `Winning patterns: <b>${s.patterns.join(', ')}</b>`,
       '',
       pending > 0 ? `📋 <b>${pending}</b> request(s) awaiting review` : '📋 No pending requests',
@@ -505,7 +646,10 @@ export function registerHandlers(
         ),
       );
     }
-    rows.push([Markup.button.callback('📱 Telebirr number', 'cfg:depositPhone')]);
+    rows.push([
+      Markup.button.callback('📱 Telebirr number', 'cfg:depositPhone'),
+      Markup.button.callback('🏦 CBE Birr number', 'cfg:cbeBirrPhone'),
+    ]);
     rows.push(
       PATTERN_KEYS.map((p) =>
         Markup.button.callback(`${s.patterns.includes(p) ? '✅' : '▫️'} ${p[0]}${p.slice(1, 4).toLowerCase()}`, `cfgp:${p}`),
@@ -651,7 +795,8 @@ export function registerHandlers(
         await ctx.reply(
           `🔐 <b>ADMIN REVIEW</b>\n${t.type === 'DEPOSIT' ? '💰 Deposit' : '💸 Withdrawal'}\n\n` +
             `From: ${who}\nName: <b>${esc(t.fullName)}</b>\nPhone: <code>${esc(t.phone)}</code>\n` +
-            `Amount: <b>${t.amount}</b> birr\nRef: <code>${t.id.slice(-8)}</code>`,
+            `Amount: <b>${t.amount}</b> birr\nRef: <code>${t.id.slice(-8)}</code>` +
+            (t.smsText ? `\n\n📩 <b>Pasted SMS:</b>\n<code>${esc(t.smsText.slice(0, 500))}</code>` : ''),
           {
             parse_mode: 'HTML',
             ...Markup.inlineKeyboard([
@@ -704,7 +849,7 @@ export function registerHandlers(
     }
 
     const field = CFG.find((f) => f.key === key);
-    const isPhone = key === 'depositPhone';
+    const isPhone = key === 'depositPhone' || key === 'cbeBirrPhone';
     if (!field && !isPhone) return void ctx.answerCbQuery('Unknown setting.');
 
     startWizard(ctx.from.id, 'config');
@@ -712,8 +857,12 @@ export function registerHandlers(
     await ctx.answerCbQuery();
     const s = await settings.get();
     const current = (s as unknown as Record<string, unknown>)[key];
+    const lim = (LIMITS as Record<string, [number, number]>)[key];
     await ctx.reply(
-      `✏️ <b>${field?.label ?? 'Telebirr number'}</b>\n\nCurrent: <b>${String(current)}</b>\n\n` +
+      `✏️ <b>${field?.label ?? 'Telebirr number'}</b>\n` +
+        (field?.desc ? `<i>${field.desc}</i>\n\n` : '\n') +
+        `Current: <b>${String(current)}${field?.unit ?? ''}</b>\n` +
+        (lim ? `Allowed: <b>${lim[0]}–${lim[1]}</b>\n\n` : '\n') +
         `Send the new value:`,
       { parse_mode: 'HTML', ...Markup.keyboard([[CANCEL]]).resize() },
     );
@@ -734,25 +883,11 @@ export function registerHandlers(
     );
   });
 
-  bot.command('leaderboard', async (ctx) => {
-    const rows = await stats.leaderboard(10);
-    if (rows.length === 0) {
-      await ctx.reply('🏅 No rounds have been played yet.');
-      return;
-    }
-    const medals = ['🥇', '🥈', '🥉'];
-    const lines = rows.map(
-      (r, i) =>
-        `${medals[i] ?? `${i + 1}.`} ${esc(displayName(r.user))} — <b>${r.gamesWon}</b> wins / ${r.gamesPlayed} played`,
-    );
-    await ctx.reply(['🏅 <b>Leaderboard</b>', ...lines].join('\n'), { parse_mode: 'HTML' });
-  });
 }
 
 export const COMMAND_MENU = [
   { command: 'start', description: 'Start / open the menu' },
   { command: 'menu', description: 'Show the main menu' },
   { command: 'stats', description: 'Your statistics' },
-  { command: 'leaderboard', description: 'Top winners' },
   { command: 'help', description: 'How to play' },
 ];
