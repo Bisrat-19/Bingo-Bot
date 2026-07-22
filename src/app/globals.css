@@ -1959,7 +1959,7 @@ body {
 .recent-balls {
   display: flex;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .mini-ball {
   width: 40px;
@@ -2180,3 +2180,76 @@ body {
 }
 .spin { animation: spin360 0.7s linear infinite; }
 @keyframes spin360 { to { transform: rotate(360deg); } }
+
+/* ---- Selected-card preview (below the selection grid) --------------------
+   One card is centred; two shrink to sit side by side without any scroll.
+   Rendered from the cached catalog, so it shows the instant a card is tapped. */
+.preview-cartelas {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 12px 4px;
+}
+.mini-cartela {
+  background: linear-gradient(160deg, #e9dcc0, #cdbb95);
+  border-radius: 11px;
+  padding: 5px;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.3);
+  width: min(48vw, 196px);
+}
+/* Two side by side: each takes half the row, shrunk to fit — never scrolls. */
+.preview-cartelas.two .mini-cartela {
+  width: min(45vw, 196px);
+  padding: 5px;
+}
+.mini-cartela-tag {
+  text-align: center;
+  font-weight: 900;
+  font-size: 12px;
+  color: #b8860b;
+  margin-bottom: 4px;
+}
+.mini-cartela-head,
+.mini-cartela-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: clamp(2px, 0.8vw, 4px);
+}
+.mini-cartela-head {
+  margin-bottom: clamp(2px, 0.8vw, 4px);
+}
+.mc-h {
+  text-align: center;
+  font-weight: 900;
+  color: #fff;
+  border-radius: 5px;
+  padding: 2px 0;
+  font-size: clamp(9px, 2.8vw, 13px);
+}
+.mc-h.b { background: var(--b); }
+.mc-h.i { background: var(--i); }
+.mc-h.n { background: var(--n); color: #4a3600; }
+.mc-h.g { background: var(--g); }
+.mc-h.o { background: var(--o); }
+.mc-cell {
+  aspect-ratio: 1 / 0.74;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #ffffff, #e7e7e7);
+  border: 1px solid #b9ac8a;
+  color: #1a1a1a;
+  font-weight: 800;
+  font-size: clamp(9px, 2.7vw, 14px);
+}
+.preview-cartelas.two .mc-cell {
+  font-size: clamp(8px, 2.3vw, 12px);
+}
+.mc-cell.free {
+  background: radial-gradient(circle, #fff6d8, #ffe08a);
+  color: var(--gold-deep);
+}
+
+/* lucide wallet icon in the home balance chip */
+.wallet-chip { display: inline-flex; align-items: center; gap: 7px; }
+.wallet-chip svg { flex-shrink: 0; }

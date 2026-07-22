@@ -8,7 +8,25 @@ import type { GameHistory, PlayerSummary } from './types';
 export const QK = {
   summary: ['summary'] as const,
   history: ['history'] as const,
+  catalog: ['catalog'] as const,
 };
+
+/**
+ * The fixed 100-card catalog as a Map(cardNumber -> 5x5 numbers). It never changes, so
+ * it is fetched once and kept forever — previews are then instant lookups.
+ */
+export function useCatalog() {
+  return useQuery({
+    queryKey: QK.catalog,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    queryFn: async (): Promise<Map<number, number[][]>> => {
+      const res = await api.catalog();
+      if ('error' in res || !res.ok) throw new Error('Could not load cards');
+      return new Map(res.cards.map((c) => [c.number, c.card]));
+    },
+  });
+}
 
 /** Wallet + Profile data (balances, stats, ledger). Cached until invalidated. */
 export function useSummary() {

@@ -83,12 +83,11 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
+    // Auto is intentionally NOT restored: every game starts in MANUAL by default.
     try {
-      const savedMode = localStorage.getItem('bingo_mode');
-      if (savedMode === 'auto' || savedMode === 'manual') setMode(savedMode);
       setSound(localStorage.getItem('bingo_sound') !== 'off');
     } catch {
-      /* storage can be unavailable; the defaults are fine */
+      /* storage can be unavailable; the default is fine */
     }
   }, []);
 
@@ -108,12 +107,16 @@ export default function Page() {
 
     // A new round clears any optimistic pick.
     if (roundRef.current !== s.roundId) {
+      const firstEver = roundRef.current === null;
       roundRef.current = s.roundId;
       leftRound.current = null;
       invalidateRef.current('all'); // a round ended/started: history and balance may have changed
       setPendingCards(new Set());
       setReleasing(new Set());
       setLocalMarks(new Map());
+      // Auto is per-game: every new round starts in MANUAL. (Skip the very first poll so
+      // we don't fight the initial mount.)
+      if (!firstEver) setMode('manual');
     }
 
     const sig = [
@@ -208,11 +211,6 @@ export default function Page() {
     }
 
     setMode(next);
-    try {
-      localStorage.setItem('bingo_mode', next);
-    } catch {
-      /* ignore */
-    }
     haptic('light');
   }, []);
 

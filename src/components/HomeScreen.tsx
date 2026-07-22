@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { Wallet } from 'lucide-react';
 
 interface Props {
   balance: number;
@@ -35,7 +36,7 @@ function HomeScreenImpl({ balance, stake, playersCount, inRound, phase, onPlay }
 
       <div className="home-balance">
         <span className="wallet-chip">
-          <span aria-hidden>👛</span> {balance}
+          <Wallet size={16} strokeWidth={2.4} /> {balance} Birr
         </span>
       </div>
 

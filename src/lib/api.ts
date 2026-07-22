@@ -43,6 +43,8 @@ export const api = {
   mark: (number: number, cardNumber?: number, numbers?: number[]) =>
     request<ActionResult>('/room/mark', numbers ? { numbers, cardNumber } : { number, cardNumber }),
   summary: () => request<PlayerSummary>('/player/summary'),
+  /** The fixed card catalog; fetched once and cached for instant previews. */
+  catalog: () => request<{ ok: boolean; cards: { number: number; card: number[][] }[] }>('/room/catalog'),
   history: (take = 20) => request<{ ok: boolean; games: GameHistory[] }>('/player/history', { take }),
   bingo: () => request<ActionResult>('/room/bingo'),
 

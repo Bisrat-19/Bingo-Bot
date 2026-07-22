@@ -1,5 +1,37 @@
 import { memo, useCallback, useRef } from 'react';
 import { LogOut, RefreshCw } from 'lucide-react';
+import { useCatalog } from '@/lib/queries';
+
+const HEAD = ['B', 'I', 'N', 'G', 'O'];
+
+/**
+ * A small preview of one selected card, rendered from the cached catalog — no backend
+ * call, so it appears the instant the card is tapped. Memoised on its numbers, which
+ * never change for a given card.
+ */
+const MiniCartela = memo(function MiniCartela({ number, card }: { number: number; card: number[][] }) {
+  return (
+    <div className="mini-cartela">
+      <div className="mini-cartela-tag">#{number}</div>
+      <div className="mini-cartela-head">
+        {HEAD.map((h) => (
+          <div key={h} className={'mc-h ' + h.toLowerCase()}>
+            {h}
+          </div>
+        ))}
+      </div>
+      <div className="mini-cartela-grid">
+        {card.flatMap((row, r) =>
+          row.map((n, c) => (
+            <div key={`${r}-${c}`} className={'mc-cell' + (n === 0 ? ' free' : '')}>
+              {n === 0 ? '★' : n}
+            </div>
+          )),
+        )}
+      </div>
+    </div>
+  );
+});
 
 interface Props {
   balance: number;
@@ -73,6 +105,8 @@ function CardSelectImpl({
   const takenSet = new Set(taken);
   const mineSet = new Set(mine);
   const full = mine.length >= maxCards;
+  // The fixed catalog, cached once. Previews are then instant lookups.
+  const { data: catalog } = useCatalog();
 
   // Held through refs so `onTap` NEVER changes identity. The parent rebuilds its
   // handlers on every poll, and a changing callback prop would defeat the memo on
@@ -143,6 +177,18 @@ function CardSelectImpl({
           );
         })}
       </div>
+
+      {/* Preview of the cards you hold, below the grid. One card is centred; two sit
+          side by side, shrunk so they never scroll. Rendered from the cached catalog,
+          so it appears the instant a card is tapped. */}
+      {mine.length > 0 && catalog && (
+        <div className={'preview-cartelas' + (mine.length > 1 ? ' two' : '')}>
+          {mine.map((n) => {
+            const card = catalog.get(n);
+            return card ? <MiniCartela key={n} number={n} card={card} /> : null;
+          })}
+        </div>
+      )}
     </div>
   );
 }
