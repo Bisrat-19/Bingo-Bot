@@ -1,9 +1,11 @@
 import type { Metadata, Viewport } from 'next';
 import Script from 'next/script';
 import './globals.css';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { QueryProvider } from '@/components/QueryProvider';
 
 export const metadata: Metadata = {
-  title: 'Bingo',
+  title: 'Chewata',
   description: 'Multiplayer Bingo Mini App',
 };
 
@@ -23,7 +25,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body suppressHydrationWarning>
         {/* Official Telegram Mini App runtime — must load before our app reads it. */}
         <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
-        {children}
+        <ErrorBoundary>
+          <QueryProvider>{children}</QueryProvider>
+        </ErrorBoundary>
       </body>
     </html>
   );

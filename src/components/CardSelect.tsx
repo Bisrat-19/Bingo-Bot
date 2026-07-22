@@ -1,6 +1,10 @@
 import { memo, useCallback, useRef } from 'react';
+import { LogOut, RefreshCw } from 'lucide-react';
 
 interface Props {
+  balance: number;
+  onLeave: () => void;
+  onRefresh: () => void;
   poolSize: number;
   taken: number[];
   /** Cards this player already holds. */
@@ -53,6 +57,9 @@ const PoolTile = memo(function PoolTile({
  * of the round, so the screen stays as light as possible and every tap is instant.
  */
 function CardSelectImpl({
+  balance,
+  onLeave,
+  onRefresh,
   poolSize,
   taken,
   mine,
@@ -81,45 +88,42 @@ function CardSelectImpl({
 
   return (
     <div className="select-screen">
-      <div className="select-head">
-        {secondsLeft == null ? (
-          <>
-            <div className="select-title">Pick your card</div>
-            <div className="select-sub">
-              {maxCards > 1
-                ? `Take up to ${maxCards} cards · ${entryFee} birr each`
-                : 'The timer starts on the first pick'}
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="select-timer">{secondsLeft}s</div>
-            <div className="select-sub">
-              Round starts soon · {playersCount} player{playersCount === 1 ? '' : 's'} in
-            </div>
-          </>
-        )}
+      {/* Status strip: leaving, the countdown, and what this round costs. */}
+      <div className="selbar">
+        <button className="selbar-btn leave" onPointerDown={onLeave} onClick={(e) => e.preventDefault()}>
+          <LogOut size={16} strokeWidth={2.4} /> Leave
+        </button>
+        <div className="selbar-timer">{secondsLeft == null ? '–' : `${secondsLeft}`}</div>
+        <div className="selbar-stat">
+          <span className="sb-k">Wallet</span>
+          <span className="sb-v">{balance}</span>
+        </div>
+        <div className="selbar-stat">
+          <span className="sb-k">Stake</span>
+          <span className="sb-v">{entryFee}</span>
+        </div>
+        <button className="selbar-btn icon" onPointerDown={onRefresh} onClick={(e) => e.preventDefault()} aria-label="Refresh">
+          <RefreshCw size={22} strokeWidth={2.4} />
+        </button>
       </div>
 
-      {maxCards > 1 && (
-        <div className="mine-strip">
-          <span className={'mine-count' + (full ? ' full' : '')}>
-            {mine.length} / {maxCards}
-          </span>
-          {mine.length === 0 ? (
-            <span className="mine-hint">Tap cards to take them</span>
-          ) : (
-            <>
-              {mine.map((n) => (
-                <button key={n} className="mine-chip" onPointerDown={() => onDeselect(n)}>
-                  #{n} <span aria-hidden>✕</span>
-                </button>
-              ))}
-              <span className="mine-hint">Tap to release</span>
-            </>
-          )}
-        </div>
-      )}
+      {/* One line for state: how many boards are held, who else is in, and the chips
+          for releasing them. The top bar already carries the countdown. */}
+      <div className="boards-line">
+        <span className={'boards-count' + (full ? ' full' : '')}>
+          Boards: {mine.length}/{maxCards}
+        </span>
+        {mine.map((n) => (
+          <button key={n} className="mine-chip" onPointerDown={() => onDeselect(n)}>
+            #{n} <span aria-hidden>✕</span>
+          </button>
+        ))}
+        <span className="boards-players">
+          {secondsLeft == null
+            ? 'Tap a card to join'
+            : `${playersCount} player${playersCount === 1 ? '' : 's'} in`}
+        </span>
+      </div>
 
       <div className="card-pool">
         {Array.from({ length: poolSize }, (_, i) => {

@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "users" ADD COLUMN     "bonusBalance" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "depositBalance" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "mainBalance" INTEGER NOT NULL DEFAULT 0;

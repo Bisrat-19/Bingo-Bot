@@ -24,6 +24,8 @@ export interface ApiBody {
   number?: number;
   /** Bulk mark (AUTO -> MANUAL carry-over). */
   numbers?: number[];
+  /** Paging for history. */
+  take?: number;
   devUser?: string;
   devUsername?: string;
   devFirst?: string;

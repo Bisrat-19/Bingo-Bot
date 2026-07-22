@@ -65,3 +65,28 @@ export interface ActionResult {
   cardNumber?: number;
   number?: number;
 }
+
+export interface PlayerSummary {
+  ok: boolean;
+  account: { username: string | null; firstName: string | null; telegramId: string; phone: string | null };
+  balances: { total: number; main: number; bonus: number; deposited: number };
+  stats: {
+    totalWithdrawal: number;
+    totalDeposit: number;
+    gamesWon: number;
+    gamesPlayed: number;
+    totalInvites: number;
+  };
+  ledger: { delta: number; balanceAfter: number; reason: string; refId: string | null; createdAt: string }[];
+}
+
+export interface GameHistory {
+  code: string;
+  playedAt: string;
+  stake: number;
+  prize: number;
+  myCards: number[];
+  winnerCard: number | null;
+  won: boolean;
+  winners: number;
+}

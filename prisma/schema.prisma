@@ -53,7 +53,14 @@ model User {
   telegramId BigInt   @unique
   username   String?
   firstName  String?
+  /// Total spendable balance. Always equals mainBalance + bonusBalance + depositBalance.
   coins      Int      @default(30)
+  /// Winnings and admin adjustments. Withdrawable.
+  mainBalance    Int  @default(0)
+  /// Promotional credit. Spent first, and never withdrawable.
+  bonusBalance   Int  @default(0)
+  /// Money the player actually paid in. Withdrawable.
+  depositBalance Int  @default(0)
   /// Collected at registration (shared via Telegram or typed).
   phone      String?
   /// Blocked players can't join rounds (admin control).

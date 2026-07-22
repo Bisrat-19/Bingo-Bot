@@ -35,6 +35,27 @@ export class WalletService {
    * Apply a balance change and record it atomically. `requireFunds` makes the debit
    * conditional so a balance can never go negative under concurrency.
    */
+  /**
+   * Which bucket a credit lands in. Debits are drawn in a fixed order instead.
+   */
+  private bucketFor(reason: LedgerReason): 'bonusBalance' | 'depositBalance' | 'mainBalance' {
+    if (reason === 'DEPOSIT') return 'depositBalance';
+    if (reason === 'BONUS' || reason === 'SIGNUP_BONUS') return 'bonusBalance';
+    return 'mainBalance';
+  }
+
+  /**
+   * Apply a balance change and record it atomically.
+   *
+   * The balance is kept in three buckets so the wallet can show where money came from:
+   *   bonus    promotional credit, spent FIRST and never withdrawable
+   *   deposit  money the player actually paid in
+   *   main     winnings and admin adjustments
+   *
+   * `coins` remains the single source of truth for "can they afford this"; the buckets
+   * always add up to it. Debits drain bonus, then deposit, then main, so a player never
+   * loses real money while promotional credit is still available.
+   */
   private async move(
     userId: string,
     delta: number,
@@ -52,8 +73,45 @@ export class WalletService {
       } else {
         await tx.user.update({ where: { id: userId }, data: { coins: { increment: delta } } });
       }
-      const user = await tx.user.findUnique({ where: { id: userId }, select: { coins: true } });
+
+      const user = await tx.user.findUnique({
+        where: { id: userId },
+        select: { coins: true, mainBalance: true, bonusBalance: true, depositBalance: true },
+      });
       const balanceAfter = user?.coins ?? 0;
+
+      if (user) {
+        let { mainBalance, bonusBalance, depositBalance } = user;
+        if (delta >= 0) {
+          const bucket = this.bucketFor(reason);
+          if (bucket === 'bonusBalance') bonusBalance += delta;
+          else if (bucket === 'depositBalance') depositBalance += delta;
+          else mainBalance += delta;
+        } else {
+          // Drain bonus first, then deposits, then winnings.
+          let owed = -delta;
+          const take = (have: number) => {
+            const t = Math.min(have, owed);
+            owed -= t;
+            return have - t;
+          };
+          bonusBalance = take(bonusBalance);
+          depositBalance = take(depositBalance);
+          mainBalance = take(mainBalance);
+          // Any shortfall means the buckets had drifted; the real balance wins.
+          if (owed > 0) mainBalance = Math.max(0, mainBalance - owed);
+        }
+        // Never let rounding or drift break the invariant buckets === coins.
+        const sum = mainBalance + bonusBalance + depositBalance;
+        if (sum !== balanceAfter) mainBalance += balanceAfter - sum;
+        if (mainBalance < 0) mainBalance = 0;
+
+        await tx.user.update({
+          where: { id: userId },
+          data: { mainBalance, bonusBalance, depositBalance },
+        });
+      }
+
       await tx.ledgerEntry.create({
         data: { userId, delta, balanceAfter, reason, refId },
       });

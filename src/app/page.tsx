@@ -4,16 +4,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { getTgProfile, haptic, initTelegram } from '@/lib/telegram';
 import { ensureSession } from '@/lib/session';
+import { useInvalidatePlayerData } from '@/lib/queries';
 import type { ActionResult, RoomState } from '@/lib/types';
-import { Ball } from '@/components/Ball';
-import { CalledBalls } from '@/components/CalledBalls';
-import { Dashboard } from '@/components/Dashboard';
-import { Card } from '@/components/Card';
 import { CardSelect } from '@/components/CardSelect';
-import { WaitingScreen } from '@/components/WaitingScreen';
-import { ActionBar } from '@/components/ActionBar';
+import { GameScreen } from '@/components/GameScreen';
 import { WinnerOverlay } from '@/components/WinnerOverlay';
 import { RegisterScreen } from '@/components/RegisterScreen';
+import { BottomNav, type Tab } from '@/components/BottomNav';
+import { HomeScreen } from '@/components/HomeScreen';
+import { HistoryScreen } from '@/components/HistoryScreen';
+import { WalletScreen } from '@/components/WalletScreen';
+import { ProfileScreen } from '@/components/ProfileScreen';
 
 type Res = ActionResult | { error: string };
 function isErr<T extends object>(r: T | { error: string }): r is { error: string } {
@@ -23,7 +24,12 @@ function isErr<T extends object>(r: T | { error: string }): r is { error: string
 export default function Page() {
   const [state, setState] = useState<RoomState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+
+  /** Which of the four sections is showing. */
+  const [tab, setTab] = useState<Tab>('home');
+  /** True once the player has entered the table from Home. */
+  const [inGame, setInGame] = useState(false);
+
   /** Optimistic pick so the tile highlights the instant it's tapped. */
   const [pendingCards, setPendingCards] = useState<Set<number>>(new Set());
   /** Cards being released, hidden immediately so the tap feels instant. */
@@ -38,6 +44,7 @@ export default function Page() {
    *         your cards completes a line.
    */
   const [mode, setMode] = useState<'manual' | 'auto'>('manual');
+  const [sound, setSound] = useState(true);
 
   const prevCalled = useRef<Set<number>>(new Set());
   /** Drives the adaptive poll rate (fast while picking, calmer while playing). */
@@ -48,6 +55,19 @@ export default function Page() {
   const inflight = useRef(false);
   const roundRef = useRef<string | null>(null);
   const sigRef = useRef<string>('');
+  const stateRef = useRef<RoomState | null>(null);
+  stateRef.current = state;
+  /**
+   * The round the player chose to step away from. Mid-round their cards stay in play
+   * (and can still win), but they asked to leave the table, so we must not drag them
+   * back on the next poll.
+   */
+  const leftRound = useRef<string | null>(null);
+  // Drop the cached Wallet/History/Profile data whenever money moves or a round ends.
+  const invalidate = useInvalidatePlayerData();
+  const invalidateRef = useRef(invalidate);
+  invalidateRef.current = invalidate;
+  const prevCoins = useRef<number | null>(null);
 
   useEffect(() => {
     initTelegram();
@@ -60,6 +80,16 @@ export default function Page() {
         }
       })
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    try {
+      const savedMode = localStorage.getItem('bingo_mode');
+      if (savedMode === 'auto' || savedMode === 'manual') setMode(savedMode);
+      setSound(localStorage.getItem('bingo_sound') !== 'off');
+    } catch {
+      /* storage can be unavailable; the defaults are fine */
+    }
   }, []);
 
   const showToast = useCallback((msg: string) => {
@@ -75,29 +105,49 @@ export default function Page() {
     if (newly.length && !first.current) haptic('light');
     prevCalled.current = new Set(s.called);
     first.current = false;
+
     // A new round clears any optimistic pick.
     if (roundRef.current !== s.roundId) {
       roundRef.current = s.roundId;
+      leftRound.current = null;
+      invalidateRef.current('all'); // a round ended/started: history and balance may have changed
       setPendingCards(new Set());
       setReleasing(new Set());
       setLocalMarks(new Map());
     }
-    // Skip the React update when nothing meaningful changed — during PLAYING this drops
-    // re-renders from ~1/sec to one per drawn ball.
+
     const sig = [
-      s.roundId, s.phase, s.secondsLeft, s.currentNumber, s.called.length,
-      s.takenCards.join(','), s.myCards.map((c) => c.cardNumber).join(','),
+      s.roundId,
+      s.phase,
+      s.secondsLeft,
+      s.currentNumber,
+      s.called.length,
+      s.takenCards.join(','),
+      s.myCards.map((c) => c.cardNumber).join(','),
       s.myCards.reduce((n, c) => n + c.marked.length, 0),
-      s.myCards.map((c) => (c.hasBingo ? 1 : 0)).join(''), s.playersCount,
-      s.coins, s.pot, s.winAmount, s.entryFee, s.nextRoundInSec, s.winner?.cardNumber ?? '',
+      s.myCards.map((c) => (c.hasBingo ? 1 : 0)).join(''),
+      s.playersCount,
+      s.coins,
+      s.pot,
+      s.winAmount,
+      s.entryFee,
+      s.nextRoundInSec,
+      s.winner?.cardNumber ?? '',
     ].join('|');
+
+    // Balance moved (stake, win, deposit, refund) -> the wallet cache is stale.
+    if (prevCoins.current !== null && s.coins != null && s.coins !== prevCoins.current) {
+      invalidateRef.current('summary');
+    }
+    if (s.coins != null) prevCoins.current = s.coins;
+
     phaseRef.current = s.phase;
     pace.current();
     if (sig === sigRef.current) return;
     sigRef.current = sig;
     setState(s);
-    // A release is confirmed once the card is no longer ours; drop the local override
-    // so re-picking the same card works immediately.
+
+    // A release is confirmed once the card is no longer ours.
     setReleasing((prev) => {
       if (prev.size === 0) return prev;
       const held = new Set(s.myCards.map((c) => c.cardNumber));
@@ -106,48 +156,7 @@ export default function Page() {
     });
   }, []);
 
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('bingo_mode');
-      if (saved === 'auto' || saved === 'manual') setMode(saved);
-    } catch {
-      /* storage can be unavailable; manual is a safe default */
-    }
-  }, []);
-
-  const stateRef = useRef<RoomState | null>(null);
-  stateRef.current = state;
-
-  const changeMode = useCallback((next: 'manual' | 'auto') => {
-    const cur = stateRef.current;
-
-    // Leaving AUTO: everything it daubed becomes a real mark, so the card carries on
-    // from where it was instead of appearing to reset to blank.
-    if (next === 'manual' && cur && cur.phase === 'PLAYING') {
-      const called = new Set(cur.called);
-      setLocalMarks((prev) => {
-        const carried = new Map(prev);
-        for (const c of cur.myCards) {
-          const hits = c.card.flat().filter((n) => n !== 0 && called.has(n));
-          if (hits.length === 0) continue;
-          carried.set(c.cardNumber, new Set([...(carried.get(c.cardNumber) ?? []), ...hits]));
-          // Persist too, so a reload does not lose them.
-          void api.mark(0, c.cardNumber, hits);
-        }
-        return carried;
-      });
-    }
-
-    setMode(next);
-    try {
-      localStorage.setItem('bingo_mode', next);
-    } catch {
-      /* ignore */
-    }
-    haptic('light');
-  }, []);
-
-  // Log in once (initData -> JWT), then poll ~1s to keep everyone in sync.
+  // Log in once (initData -> JWT), then poll to keep everyone in sync.
   useEffect(() => {
     let id: number | undefined;
     void (async () => {
@@ -172,10 +181,54 @@ export default function Page() {
     };
   }, [refresh]);
 
+  /** Holding a card puts you at the table, unless you deliberately left this round. */
+  useEffect(() => {
+    if (!state || state.myCards.length === 0) return;
+    if (leftRound.current === state.roundId) return;
+    setInGame(true);
+  }, [state]);
+
+  const changeMode = useCallback((next: 'manual' | 'auto') => {
+    const cur = stateRef.current;
+
+    // Leaving AUTO: everything it daubed becomes a real mark, so the card carries on
+    // from where it was instead of appearing to reset to blank.
+    if (next === 'manual' && cur && cur.phase === 'PLAYING') {
+      const called = new Set(cur.called);
+      setLocalMarks((prev) => {
+        const carried = new Map(prev);
+        for (const c of cur.myCards) {
+          const hits = c.card.flat().filter((n) => n !== 0 && called.has(n));
+          if (hits.length === 0) continue;
+          carried.set(c.cardNumber, new Set([...(carried.get(c.cardNumber) ?? []), ...hits]));
+          void api.mark(0, c.cardNumber, hits);
+        }
+        return carried;
+      });
+    }
+
+    setMode(next);
+    try {
+      localStorage.setItem('bingo_mode', next);
+    } catch {
+      /* ignore */
+    }
+    haptic('light');
+  }, []);
+
+  const changeSound = useCallback((on: boolean) => {
+    setSound(on);
+    try {
+      localStorage.setItem('bingo_sound', on ? 'on' : 'off');
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const onSelect = useCallback(
     async (n: number) => {
-      if (!state || state.phase !== 'SELECTING') return;
-      // Instant feedback: highlight immediately, then confirm with the server.
+      const cur = stateRef.current;
+      if (!cur || cur.phase !== 'SELECTING') return;
       setPendingCards((prev) => new Set(prev).add(n));
       haptic('light');
       const res = await api.select(n);
@@ -195,7 +248,7 @@ export default function Page() {
       }
       void refresh();
     },
-    [state, refresh, showToast],
+    [refresh, showToast],
   );
 
   const onDeselect = useCallback(
@@ -210,7 +263,6 @@ export default function Page() {
       haptic('light');
       const res = await api.deselect(n);
       if (!isErr(res) && !res.ok) {
-        // Put it back: the server refused, so the card is still ours.
         setReleasing((prev) => {
           const next = new Set(prev);
           next.delete(n);
@@ -225,13 +277,13 @@ export default function Page() {
 
   const onMark = useCallback(
     (n: number, cardNumber: number) => {
-      if (!state) return;
-      if (!state.called.includes(n)) {
+      const cur = stateRef.current;
+      if (!cur) return;
+      if (!cur.called.includes(n)) {
         haptic('error');
         showToast(`${n} not called yet!`);
         return;
       }
-      // Paint it instantly on THAT card only; the network round-trip happens after.
       setLocalMarks((prev) => {
         const forCard = prev.get(cardNumber);
         if (forCard?.has(n)) return prev;
@@ -242,49 +294,49 @@ export default function Page() {
       haptic('light');
       void api.mark(n, cardNumber);
     },
-    [state, showToast],
+    [showToast],
   );
 
-  const onBingo = useCallback(async (auto = false) => {
-    // Fired on pointer-down for the lowest possible latency: with "first valid press
-    // wins", every millisecond counts. The ref de-dupes without disabling the button.
-    if (inflight.current) return;
-    inflight.current = true;
-    setClaiming(true); // paint immediately — no waiting on the network
-    haptic('light');
-    const res = await api.bingo();
-    inflight.current = false;
-    setClaiming(false);
-    if (isErr(res)) {
-      if (!auto) showToast('Network error');
-    } else if (res.ok) {
-      haptic('success');
-      showToast(
-        res.cardNumber != null
-          ? `🎉 BINGO on card #${res.cardNumber}! You win!`
-          : '🎉 BINGO! You win!',
-      );
-    } else if (auto) {
-      // An auto attempt that misses is normal (someone else was first, or the line had
-      // already passed). Staying silent keeps the screen calm instead of nagging.
-    } else if (res.reason === 'invalid') {
-      haptic('error');
-      showToast("❌ Invalid Bingo — you don't have a line yet.");
-    } else if (res.reason === 'passed') {
-      haptic('error');
-      showToast('⏭️ Too late — that line passed! Finish another pattern.');
-    } else if (res.reason === 'cooldown') {
-      showToast(`⏳ Wait ${res.retryAfterSec}s before trying again.`);
-    } else {
-      showToast(res.reason || 'Not yet!');
-    }
-    void refresh();
-  }, [refresh, showToast]);
+  const onBingo = useCallback(
+    async (auto = false) => {
+      // Fired on pointer-down for the lowest possible latency: with "first valid press
+      // wins", every millisecond counts. The ref de-dupes without disabling the button.
+      if (inflight.current) return;
+      inflight.current = true;
+      setClaiming(true);
+      haptic('light');
+      const res = await api.bingo();
+      inflight.current = false;
+      setClaiming(false);
+
+      if (isErr(res)) {
+        if (!auto) showToast('Network error');
+      } else if (res.ok) {
+        haptic('success');
+        showToast(
+          res.cardNumber != null ? `🎉 BINGO on card #${res.cardNumber}! You win!` : '🎉 BINGO! You win!',
+        );
+      } else if (auto) {
+        // A missed auto attempt is normal; staying silent keeps the screen calm.
+      } else if (res.reason === 'invalid') {
+        haptic('error');
+        showToast('❌ Not a win');
+      } else if (res.reason === 'passed') {
+        haptic('error');
+        showToast('⏭️ Too late');
+      } else if (res.reason === 'cooldown') {
+        showToast(`⏳ Wait ${res.retryAfterSec}s before trying again.`);
+      } else {
+        showToast(res.reason || 'Not yet!');
+      }
+      void refresh();
+    },
+    [refresh, showToast],
+  );
 
   /**
    * AUTO mode: claim the moment the server says one of your cards completed a line on
-   * the ball just called. It keys off `currentNumber`, so it fires at most once per
-   * ball and never spams the server after a miss.
+   * the ball just called. Keyed off `currentNumber`, so it fires at most once per ball.
    */
   const autoTried = useRef<string>('');
   useEffect(() => {
@@ -296,12 +348,24 @@ export default function Page() {
     void onBingo(true);
   }, [mode, state, onBingo]);
 
+  const leaveTable = useCallback(async () => {
+    const cur = stateRef.current;
+    // Leaving during selection gives the stake back; mid-round the cards stay in play.
+    if (cur?.phase === 'SELECTING' && cur.myCards.length > 0) {
+      await api.deselect();
+      void refresh();
+    }
+    if (cur) leftRound.current = cur.roundId;
+    setInGame(false);
+    setTab('home');
+  }, [refresh]);
+
   if (!state) return <div className="loading">Connecting to the Bingo room…</div>;
 
   if (!state.registered) {
     const profile = getTgProfile();
     return (
-      <div className="game">
+      <div className="app">
         <RegisterScreen name={profile.name} />
         {toast && <div className="toast">{toast}</div>}
       </div>
@@ -309,44 +373,26 @@ export default function Page() {
   }
 
   const selecting = state.phase === 'SELECTING';
+  const holdsCards = state.myCards.length > 0;
   // Confirmed cards plus any pick still in flight, so the grid never flickers.
-  const myCardNumbers = [
-    ...new Set([...state.myCards.map((c) => c.cardNumber), ...pendingCards]),
-  ]
+  const myCardNumbers = [...new Set([...state.myCards.map((c) => c.cardNumber), ...pendingCards])]
     .filter((n) => !releasing.has(n))
     .sort((a, b) => a - b);
-  // A player who opened the app mid-round has no card — they wait for the next round
-  // instead of being dropped onto a board they can't play.
-  const spectating = !selecting && state.myCards.length === 0;
+
+  // The table takes over the screen only while the player is actually at it.
+  const atTable = inGame && tab === 'home';
+  // The live game is full-screen with its own action bar, so the app's bottom nav is
+  // hidden — matching how the round takes over the whole display.
+  const inLiveGame = atTable && !selecting && holdsCards;
 
   return (
-    <div className="game">
-      <header className="game-top">
-        <div className="game-title">🎲 Bingo 75</div>
-        <div className="mode-toggle" role="group" aria-label="Play mode">
-          <button
-            className={mode === 'manual' ? 'on' : ''}
-            onPointerDown={() => changeMode('manual')}
-            onClick={(e) => e.preventDefault()}
-          >
-            Manual
-          </button>
-          <button
-            className={mode === 'auto' ? 'on' : ''}
-            onPointerDown={() => changeMode('auto')}
-            onClick={(e) => e.preventDefault()}
-          >
-            Auto
-          </button>
-        </div>
-        <div className="top-right">
-          {state.phase === 'PLAYING' && <div className="pill live">LIVE</div>}
-        </div>
-      </header>
-
-      <div className="stage">
-        {selecting ? (
+    <div className={'app' + (inLiveGame ? ' ingame' : '')}>
+      {atTable ? (
+        selecting || !holdsCards ? (
           <CardSelect
+            balance={state.coins ?? 0}
+            onLeave={() => void leaveTable()}
+            onRefresh={() => void refresh()}
             poolSize={state.poolSize}
             taken={state.takenCards.filter((n) => !myCardNumbers.includes(n))}
             mine={myCardNumbers}
@@ -354,65 +400,59 @@ export default function Page() {
             secondsLeft={state.secondsLeft}
             playersCount={state.playersCount}
             entryFee={state.entryFee}
-            busy={busy}
+            busy={false}
             onSelect={onSelect}
             onDeselect={onDeselect}
           />
-        ) : spectating ? (
-          <WaitingScreen
-            currentNumber={state.currentNumber}
-            calledCount={state.called.length}
-            playersCount={state.playersCount}
-            finished={state.phase === 'FINISHED'}
-            nextRoundInSec={state.nextRoundInSec}
-          />
         ) : (
-          <>
-            <div className="ball-row">
-              <Ball
-                current={state.currentNumber}
-                calledCount={state.called.length}
-                countdownLeft={null}
-                status={state.phase}
-              />
-              <CalledBalls called={state.called} />
-            </div>
+          <GameScreen
+            state={state}
+            mode={mode}
+            claiming={claiming}
+            localMarks={localMarks}
+            onMode={changeMode}
+            onMark={onMark}
+            onBingo={() => void onBingo(false)}
+            onLeave={() => void leaveTable()}
+            onRefresh={() => void refresh()}
+          />
+        )
+      ) : tab === 'home' ? (
+        <HomeScreen
+          balance={state.coins ?? 0}
+          stake={state.entryFee}
+          playersCount={state.playersCount}
+          inRound={holdsCards}
+          phase={state.phase}
+          onPlay={() => {
+            setInGame(true);
+            setTab('home');
+            haptic('light');
+          }}
+        />
+      ) : tab === 'history' ? (
+        <HistoryScreen />
+      ) : tab === 'wallet' ? (
+        <WalletScreen />
+      ) : (
+        <ProfileScreen />
+      )}
 
-            <div className="playrow">
-              <Dashboard called={state.called} current={state.currentNumber} />
-              {/* Every card the player bought, laid out in a row. */}
-              <div className="my-cards">
-                {state.myCards.map((c) => (
-                  <div className={'my-card' + (c.hasBingo ? ' ready' : '')} key={c.cardNumber}>
-                    {state.myCards.length > 1 && (
-                      <div className="my-card-tag">
-                        #{c.cardNumber}
-                        {c.hasBingo && <span className="ready-flag">BINGO</span>}
-                      </div>
-                    )}
-                    <Card
-                      card={c.card}
-                      marked={
-                        mode === 'auto'
-                          ? state.called
-                          : [...c.marked, ...(localMarks.get(c.cardNumber) ?? [])]
-                      }
-                      called={state.called}
-                      onMark={mode === 'auto' ? undefined : (n) => onMark(n, c.cardNumber)}
-                      active={state.phase === 'PLAYING'}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-
-      <ActionBar state={state} claiming={claiming} onBingo={onBingo} />
+      {/* The live game has its own Leave/Refresh/BINGO bar, so the app nav steps aside. */}
+      {!inLiveGame && (
+        <BottomNav
+          tab={tab}
+          playing={holdsCards}
+          onChange={(t) => {
+            setTab(t);
+            haptic('light');
+          }}
+        />
+      )}
 
       {toast && <div className="toast">{toast}</div>}
-      {state.phase === 'FINISHED' && state.winner && (
+
+      {state.phase === 'FINISHED' && state.winner && atTable && (
         <WinnerOverlay
           name={state.winner.name}
           cardNumber={state.winner.cardNumber}

@@ -27,7 +27,7 @@ export function WinnerOverlay({ name, cardNumber, prize, pattern, line, card, ne
         <div className="confetti">🎉</div>
         <h1>BINGO!</h1>
         <p className="winner-name">{name}</p>
-        <div className="winner-prize">+{prize} birr</div>
+        <div className="winner-prize">+{prize} Birr</div>
         <div className="winner-cardno">
           Card #{cardNumber}
           {pattern && <> · {PATTERN_LABEL[pattern] ?? pattern}</>}
